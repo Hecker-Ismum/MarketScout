@@ -1,0 +1,26 @@
+# Compiled class files
+target/
+
+# IDE files
+.idea/
+*.iml
+.vscode/
+.project
+.classpath
+.settings/
+*.swp
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Maven wrapper (if downloaded locally)
+!.mvn/wrapper/maven-wrapper.jar
+
+# Database files created at runtime
+*.db
+
+# Logs
+*.log
