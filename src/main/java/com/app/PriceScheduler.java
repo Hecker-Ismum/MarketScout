@@ -1,158 +1,94 @@
 package com.app;
 
-// ──────────────────────────────────────────────
-// Concurrency — runs periodic work off the UI thread
-// ──────────────────────────────────────────────
+import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-
-// ──────────────────────────────────────────────
-// JavaFX thread bridge
-// ──────────────────────────────────────────────
-import javafx.application.Platform;
-
-// ──────────────────────────────────────────────
-// Functional callback for delivering new prices
-// ──────────────────────────────────────────────
 import java.util.function.Consumer;
 
+import javafx.application.Platform;
+
 /**
- * Schedules a recurring background task that fetches a price every N minutes
- * and safely delivers the result to the JavaFX Application Thread.
+ * Schedules a recurring background task that fetches price history every
+ * N minutes and safely delivers the result to the JavaFX Application Thread.
  *
- * <h3>Why is {@link Platform#runLater(Runnable)} necessary?</h3>
- *
- * JavaFX enforces a <b>single-threaded rendering rule</b>: only the
- * <em>JavaFX Application Thread</em> is allowed to read or modify the
- * scene graph (labels, charts, text fields, etc.).
- *
- * The {@link ScheduledExecutorService} runs its tasks on a <b>separate
- * background thread</b> from its own pool. If that thread tried to update
- * a Label or add data to a chart directly, JavaFX would throw an
- * {@code IllegalStateException} — or worse, silently corrupt the scene
- * graph and cause visual glitches or crashes.
- *
- * {@code Platform.runLater(Runnable)} solves this by posting the given
- * {@link Runnable} onto the JavaFX Application Thread's event queue.
- * The FX thread picks it up on its next pulse and executes it safely.
- *
+ * <h3>Threading model</h3>
  * <pre>
- *   Background thread            FX Application Thread
- *   ─────────────────            ─────────────────────
- *   fetch price                         ...
+ *   ScheduledExecutorService thread        JavaFX Application Thread
+ *   ──────────────────────────────         ─────────────────────────
+ *   fetcher.fetchHistory(...)
  *        │
- *        ├─ Platform.runLater(──►  queued ──► update Label
- *        │     () -> label.setText(...)  )
+ *        ├─ Platform.runLater(──►  queued ──► uiCallback.accept(data)
+ *        │     () -> uiCallback.accept(data) )
  *        ▼
- *   (continues / sleeps)
+ *   (sleeps until next interval)
  * </pre>
+ *
+ * <p>Using {@link Platform#runLater(Runnable)} is mandatory because JavaFX
+ * enforces a single-threaded scene-graph rule: only the FX Application Thread
+ * may modify labels, charts, or any other UI node.</p>
  */
 public class PriceScheduler {
 
-    // A single-threaded pool is enough — we only run one periodic task.
-    // Using a daemon thread ensures the executor won't prevent the JVM
-    // from exiting when the user closes the window.
+    /** Single-thread pool — one periodic task is sufficient. */
     private ScheduledExecutorService scheduler;
 
     /**
-     * Starts a repeating task that fetches a new price every
-     * {@code intervalMinutes} minutes.
+     * Starts a repeating fetch task.
      *
-     * <p>The workflow inside each tick:
-     * <ol>
-     *   <li>Run on a <b>background thread</b> → simulate (or perform)
-     *       an expensive network/database call.</li>
-     *   <li>Obtain the result as a {@code double}.</li>
-     *   <li>Call {@link Platform#runLater(Runnable)} to hand the value
-     *       back to the <b>JavaFX Application Thread</b>, where it is
-     *       safe to update any UI control.</li>
-     * </ol>
-     *
-     * @param intervalMinutes how often to fetch, in minutes
-     * @param uiCallback      a {@link Consumer} that receives the new price
-     *                         <b>on the FX thread</b> — safe to update UI here
+     * @param fetcher         the {@link ApiFetcher} to use for data retrieval
+     * @param ticker          the stock or crypto symbol to fetch
+     * @param apiKey          Alpha Vantage API key (ignored for crypto)
+     * @param intervalMinutes how often to fetch (minimum 1 minute recommended)
+     * @param uiCallback      invoked on the <b>JavaFX Application Thread</b> with
+     *                        the latest list of {@link PricePoint} objects;
+     *                        may receive {@code null} if the fetch fails
      */
-    public void startPriceFetching(long intervalMinutes, Consumer<Double> uiCallback) {
+    public void startPriceFetching(ApiFetcher fetcher,
+                                   String ticker,
+                                   String apiKey,
+                                   long intervalMinutes,
+                                   Consumer<List<PricePoint>> uiCallback) {
 
-        // Create a single-thread scheduled executor.
-        // The lambda converts threads to daemon threads so they don't
-        // block JVM shutdown when the JavaFX window is closed.
-        scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
-            Thread t = new Thread(runnable, "PriceScheduler-thread");
-            t.setDaemon(true); // JVM can exit even if this thread is alive
+        // Daemon threads allow the JVM to exit even if the pool is still active
+        scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "PriceScheduler-thread");
+            t.setDaemon(true);
             return t;
         });
 
-        // Schedule the task: runs once immediately (initialDelay = 0),
-        // then repeats every `intervalMinutes` minutes.
+        // initialDelay = 0 → first run immediately, then every intervalMinutes
         scheduler.scheduleAtFixedRate(() -> {
 
-            // ──────────────────────────────────────────────────────
-            // STEP 1 — Background thread work (heavy / blocking)
-            // ──────────────────────────────────────────────────────
-            // This code runs on the ScheduledExecutorService's pool thread,
-            // NOT on the JavaFX Application Thread.
-            // It is safe to do network I/O, database queries, or any
-            // long-running work here without freezing the UI.
+            // ── Background thread: do the heavy network I/O here ──────────────
+            System.out.println("[Scheduler] Fetching " + ticker
+                    + " on thread: " + Thread.currentThread().getName());
 
+            List<PricePoint> data;
             try {
-                System.out.println("[BG] Fetching price on thread: "
-                        + Thread.currentThread().getName());
-
-                // --- Simulate a network call that takes 1-2 seconds ---
-                // In production, replace this with:
-                //   ApiFetcher fetcher = new ApiFetcher();
-                //   PricePoint pp = fetcher.fetchPricePoint(apiUrl);
-                //   double newPrice = pp.getPrice();
-                double newPrice = simulatePriceFetch();
-
-                System.out.println("[BG] Fetched price: " + newPrice);
-
-                // ──────────────────────────────────────────────────
-                // STEP 2 — Hand the result to the JavaFX thread
-                // ──────────────────────────────────────────────────
-                //
-                // WHY Platform.runLater() IS NECESSARY:
-                //
-                //   • JavaFX is NOT thread-safe. Its scene graph (Labels,
-                //     Charts, TextFields, etc.) must only be touched from
-                //     the JavaFX Application Thread.
-                //
-                //   • We are currently on a ScheduledExecutorService pool
-                //     thread. If we called label.setText(newPrice) here,
-                //     JavaFX would throw IllegalStateException or silently
-                //     corrupt the UI.
-                //
-                //   • Platform.runLater() puts the Runnable onto the FX
-                //     event queue. The FX thread picks it up on its next
-                //     pulse (~60 Hz) and executes it safely.
-                //
-                //   • The variable `newPrice` is effectively final, so it
-                //     can be captured by the lambda without issues.
-                //
-                Platform.runLater(() -> {
-                    // This lambda runs on the JavaFX Application Thread.
-                    // It is now safe to update any UI component.
-                    uiCallback.accept(newPrice);
-                });
-
+                data = fetcher.fetchHistory(ticker, apiKey);
+                System.out.println("[Scheduler] Fetch complete: "
+                        + (data != null ? data.size() + " points" : "null (error)"));
             } catch (Exception e) {
-                // Catch any exception so the scheduler doesn't silently
-                // cancel future executions (a quirk of ScheduledExecutorService).
-                System.err.println("[BG] Error during price fetch: " + e.getMessage());
+                // Catch all to prevent ScheduledExecutorService from silently
+                // cancelling future executions on uncaught exceptions.
+                System.err.println("[Scheduler] Unexpected error: " + e.getMessage());
                 e.printStackTrace();
+                data = null;
             }
+
+            // ── Hand result to the JavaFX thread ──────────────────────────────
+            final List<PricePoint> finalData = data;
+            Platform.runLater(() -> uiCallback.accept(finalData));
 
         }, 0, intervalMinutes, TimeUnit.MINUTES);
 
-        System.out.println("[PriceScheduler] Started — fetching every "
-                + intervalMinutes + " minute(s).");
+        System.out.println("[Scheduler] Started — every " + intervalMinutes + " minute(s) for " + ticker);
     }
 
     /**
-     * Gracefully shuts down the scheduler, waiting briefly for any
-     * in-flight task to finish.
+     * Gracefully shuts down the scheduler, waiting up to 5 seconds for the
+     * in-flight task to finish before forcing termination.
      */
     public void stop() {
         if (scheduler != null && !scheduler.isShutdown()) {
@@ -165,28 +101,12 @@ public class PriceScheduler {
                 scheduler.shutdownNow();
                 Thread.currentThread().interrupt();
             }
-            System.out.println("[PriceScheduler] Stopped.");
+            System.out.println("[Scheduler] Stopped.");
         }
     }
 
-    // ──────────────────────────────────────────────────────────
-    // Simulated price fetch (replace with real API call)
-    // ──────────────────────────────────────────────────────────
-
-    /**
-     * Simulates a slow network call that returns a random price.
-     * Replace this with a real {@link ApiFetcher} call in production.
-     *
-     * @return a simulated closing price between 100 and 350
-     */
-    private double simulatePriceFetch() {
-        // Simulate network latency
-        try {
-            Thread.sleep(1000);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-        // Random price between 100.00 and 350.00
-        return 100.0 + (Math.random() * 250.0);
+    /** @return {@code true} if the scheduler has been started and not yet stopped */
+    public boolean isRunning() {
+        return scheduler != null && !scheduler.isShutdown();
     }
 }

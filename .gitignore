@@ -22,5 +22,8 @@ desktop.ini
 # Database files created at runtime
 *.db
 
+# Maven Shade plugin generated file
+dependency-reduced-pom.xml
+
 # Logs
 *.log
