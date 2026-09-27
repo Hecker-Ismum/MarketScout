@@ -39,25 +39,27 @@ public final class NotificationService {
 
             // ── Layout ───────────────────────────────────────────────────────
             VBox box = new VBox(5);
-            box.setPadding(new Insets(14, 18, 14, 18));
-            box.setMaxWidth(320);
+            box.setPadding(new Insets(12, 16, 12, 16));
+            box.setMaxWidth(330);
             box.setStyle(
-                    "-fx-background-color: #1e2a4a;"
-                    + "-fx-border-color: #3a7bd5;"
+                    "-fx-background-color: #080808;"
+                    + "-fx-border-color: #00aa22;"
                     + "-fx-border-width: 1;"
-                    + "-fx-border-radius: 8;"
-                    + "-fx-background-radius: 8;"
+                    + "-fx-border-radius: 0;"
+                    + "-fx-background-radius: 0;"
             );
 
-            Label titleLabel = new Label("🔔 " + title);
+            Label titleLabel = new Label(">_  " + title);
             titleLabel.setStyle(
-                    "-fx-text-fill: #7dd3fc; -fx-font-weight: bold; -fx-font-size: 13px;");
+                    "-fx-text-fill: #00ff41; -fx-font-weight: bold; -fx-font-size: 12px;"
+                    + "-fx-font-family: 'Courier New';");
             titleLabel.setWrapText(true);
 
             Label msgLabel = new Label(message);
-            msgLabel.setStyle("-fx-text-fill: #c0c0e0; -fx-font-size: 11px;");
+            msgLabel.setStyle("-fx-text-fill: #009922; -fx-font-size: 11px;"
+                    + "-fx-font-family: 'Courier New';");
             msgLabel.setWrapText(true);
-            msgLabel.setMaxWidth(280);
+            msgLabel.setMaxWidth(300);
 
             box.getChildren().addAll(titleLabel, msgLabel);
             box.setAlignment(Pos.CENTER_LEFT);
