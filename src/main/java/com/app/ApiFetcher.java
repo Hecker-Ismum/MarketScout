@@ -18,35 +18,33 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonSyntaxException;
 
 /**
- * Fetches historical price data from real market APIs.
+ * Fetches historical OHLC price data from real market APIs.
  *
- * <h3>Stocks — Alpha Vantage</h3>
- * <p>Uses the {@code TIME_SERIES_DAILY} endpoint (compact = last 100 trading days).
- * Requires a free API key from <a href="https://www.alphavantage.co">alphavantage.co</a>.
- * The built-in {@code "demo"} key only works for the ticker {@code IBM}.</p>
+ * <h3>Stocks — Alpha Vantage TIME_SERIES_DAILY</h3>
+ * Returns the last ~100 trading days. Requires a free API key.
+ * The "demo" key only works for ticker IBM.
  *
- * <h3>Crypto — CoinGecko</h3>
- * <p>Uses the {@code /coins/{id}/market_chart} endpoint (365 days = daily granularity).
- * No API key required. Crypto tickers are auto-detected via a built-in symbol→id map.</p>
+ * <h3>Crypto — CoinGecko market_chart</h3>
+ * Returns 365 days of daily close prices. No API key required.
+ * Crypto tickers are auto-detected via a built-in symbol→id map.
  */
 public class ApiFetcher {
 
-    // ── Alpha Vantage ─────────────────────────────────────────────────────────
+    // ── Endpoints ─────────────────────────────────────────────────────────────
 
-    private static final String AV_BASE =
+    private static final String AV_DAILY =
             "https://www.alphavantage.co/query"
             + "?function=TIME_SERIES_DAILY"
             + "&symbol=%s"
-            + "&outputsize=compact"   // last ~100 trading days
+            + "&outputsize=compact"
             + "&apikey=%s";
 
-    // ── CoinGecko ─────────────────────────────────────────────────────────────
-
-    private static final String CG_BASE =
+    private static final String CG_MARKET_CHART =
             "https://api.coingecko.com/api/v3/coins/%s/market_chart"
-            + "?vs_currency=usd&days=365"; // >90 days → daily granularity
+            + "?vs_currency=usd&days=365";
 
-    /** Maps common crypto ticker symbols to their CoinGecko coin IDs. */
+    // ── Crypto symbol → CoinGecko ID map ─────────────────────────────────────
+
     private static final Map<String, String> CRYPTO_IDS = new HashMap<>();
     static {
         CRYPTO_IDS.put("BTC",   "bitcoin");
@@ -64,143 +62,108 @@ public class ApiFetcher {
         CRYPTO_IDS.put("UNI",   "uniswap");
         CRYPTO_IDS.put("ATOM",  "cosmos");
         CRYPTO_IDS.put("XLM",   "stellar");
+        CRYPTO_IDS.put("SHIB",  "shiba-inu");
+        CRYPTO_IDS.put("TRX",   "tron");
+        CRYPTO_IDS.put("TON",   "the-open-network");
     }
 
-    // ── Shared infrastructure ─────────────────────────────────────────────────
+    // ── Infrastructure ────────────────────────────────────────────────────────
 
-    /** Thread-safe; reuse across requests. */
-    private final HttpClient httpClient;
-    /** Thread-safe; reuse across parse calls. */
-    private final Gson gson;
+    private final HttpClient httpClient = HttpClient.newHttpClient();
+    private final Gson       gson       = new Gson();
 
-    /** Stores the last human-readable error message (for display in the UI). */
     private String lastError = "";
 
-    public ApiFetcher() {
-        this.httpClient = HttpClient.newHttpClient();
-        this.gson       = new Gson();
-    }
-
-    /** @return the last error message produced by a fetch operation. */
-    public String getLastError() { return lastError; }
+    public String  getLastError()            { return lastError; }
+    public boolean isCrypto(String ticker)   { return CRYPTO_IDS.containsKey(ticker.toUpperCase()); }
 
     // ── Public API ────────────────────────────────────────────────────────────
 
     /**
-     * Returns {@code true} if the ticker is a recognised crypto symbol.
-     * Used by the caller to display "no API key needed" hints.
-     */
-    public boolean isCrypto(String ticker) {
-        return CRYPTO_IDS.containsKey(ticker.toUpperCase());
-    }
-
-    /**
-     * Auto-routes to the appropriate data source based on the ticker symbol:
-     * <ul>
-     *   <li>Crypto symbols (BTC, ETH, …) → CoinGecko (no key needed)</li>
-     *   <li>Everything else              → Alpha Vantage (key required)</li>
-     * </ul>
+     * Auto-routes to CoinGecko for crypto, Alpha Vantage for everything else.
      *
-     * @param ticker the stock or crypto symbol (case-insensitive)
-     * @param apiKey Alpha Vantage API key; ignored for crypto tickers
-     * @return a list of {@link PricePoint} objects sorted by date ascending,
-     *         or {@code null} on failure (check {@link #getLastError()})
+     * @return sorted (ascending date) list of {@link PricePoint}, or {@code null} on error
      */
     public List<PricePoint> fetchHistory(String ticker, String apiKey) {
         lastError = "";
         String t = ticker.toUpperCase();
-        if (isCrypto(t)) {
-            return fetchCryptoHistory(t);
-        } else {
-            return fetchStockHistory(t, apiKey);
-        }
+        return isCrypto(t) ? fetchCryptoHistory(t) : fetchStockHistory(t, apiKey);
     }
 
-    // ── Alpha Vantage (stocks) ────────────────────────────────────────────────
+    // ── Alpha Vantage ─────────────────────────────────────────────────────────
 
     /**
-     * Fetches daily closing prices from Alpha Vantage for the given stock symbol.
+     * Parses full OHLC data from Alpha Vantage TIME_SERIES_DAILY.
      *
-     * <p>Alpha Vantage TIME_SERIES_DAILY response structure:</p>
      * <pre>
-     * {
-     *   "Meta Data": { ... },
-     *   "Time Series (Daily)": {
-     *     "2024-01-05": { "4. close": "181.18", ... },
-     *     "2024-01-04": { "4. close": "182.01", ... },
-     *     ...
-     *   }
+     * "Time Series (Daily)": {
+     *   "2024-01-05": {
+     *     "1. open":  "181.99",
+     *     "2. high":  "182.76",
+     *     "3. low":   "180.17",
+     *     "4. close": "181.18",
+     *     "5. volume":"42835832"
+     *   }, ...
      * }
      * </pre>
      */
     private List<PricePoint> fetchStockHistory(String symbol, String apiKey) {
         String key = (apiKey == null || apiKey.isBlank()) ? "demo" : apiKey.trim();
-        String url = String.format(AV_BASE, symbol, key);
-
+        String url = String.format(AV_DAILY, symbol, key);
         String json = fetchRaw(url);
         if (json == null) return null;
 
         try {
             JsonObject root = gson.fromJson(json, JsonObject.class);
 
-            // Detect API-level errors returned inside a 200 response
             if (root.has("Note")) {
-                lastError = "Alpha Vantage rate limit reached: " + root.get("Note").getAsString();
-                System.err.println("[API] " + lastError);
+                lastError = "Alpha Vantage rate limit: " + root.get("Note").getAsString();
                 return null;
             }
             if (root.has("Information")) {
                 lastError = root.get("Information").getAsString();
-                System.err.println("[API] " + lastError);
                 return null;
             }
             if (root.has("Error Message")) {
                 lastError = root.get("Error Message").getAsString();
-                System.err.println("[API] " + lastError);
                 return null;
             }
 
             JsonObject timeSeries = root.getAsJsonObject("Time Series (Daily)");
             if (timeSeries == null) {
-                lastError = "Unexpected response from Alpha Vantage (no time series found).";
+                lastError = "No time-series data in Alpha Vantage response.";
                 return null;
             }
 
-            // Parse each date entry into a PricePoint
             List<PricePoint> result = new ArrayList<>();
             for (Map.Entry<String, JsonElement> entry : timeSeries.entrySet()) {
-                String date  = entry.getKey();                              // "2024-01-05"
-                double close = entry.getValue().getAsJsonObject()
-                                    .get("4. close").getAsDouble();
-                result.add(new PricePoint(symbol, close, "USD", date));
+                String     date = entry.getKey();
+                JsonObject day  = entry.getValue().getAsJsonObject();
+
+                double open  = day.get("1. open").getAsDouble();
+                double high  = day.get("2. high").getAsDouble();
+                double low   = day.get("3. low").getAsDouble();
+                double close = day.get("4. close").getAsDouble();
+
+                result.add(new PricePoint(symbol, open, high, low, close, "USD", date));
             }
 
-            // Alpha Vantage returns newest first; sort ascending for the chart
             result.sort(Comparator.comparing(PricePoint::getDate));
             System.out.println("[API] Alpha Vantage: " + result.size() + " points for " + symbol);
             return result;
 
         } catch (JsonSyntaxException e) {
-            lastError = "Failed to parse Alpha Vantage response: " + e.getMessage();
-            System.err.println("[API] " + lastError);
+            lastError = "Parse error (Alpha Vantage): " + e.getMessage();
             return null;
         }
     }
 
-    // ── CoinGecko (crypto) ────────────────────────────────────────────────────
+    // ── CoinGecko ─────────────────────────────────────────────────────────────
 
     /**
-     * Fetches daily closing prices from CoinGecko for the given crypto symbol.
-     *
-     * <p>CoinGecko market_chart response structure:</p>
-     * <pre>
-     * {
-     *   "prices": [
-     *     [1704067200000, 42265.14],  // [unix_ms, price]
-     *     ...
-     *   ]
-     * }
-     * </pre>
+     * Fetches daily close prices from CoinGecko.
+     * OHLC fields (open / high / low) are set to the close value because the
+     * {@code market_chart} endpoint only provides close prices.
      */
     private List<PricePoint> fetchCryptoHistory(String symbol) {
         String coinId = CRYPTO_IDS.get(symbol.toUpperCase());
@@ -209,16 +172,14 @@ public class ApiFetcher {
             return null;
         }
 
-        String url  = String.format(CG_BASE, coinId);
-        String json = fetchRaw(url);
+        String json = fetchRaw(String.format(CG_MARKET_CHART, coinId));
         if (json == null) return null;
 
         try {
             JsonObject root   = gson.fromJson(json, JsonObject.class);
             JsonArray  prices = root.getAsJsonArray("prices");
-
             if (prices == null) {
-                lastError = "Unexpected response from CoinGecko.";
+                lastError = "Unexpected CoinGecko response.";
                 return null;
             }
 
@@ -229,33 +190,26 @@ public class ApiFetcher {
                 JsonArray pair    = elem.getAsJsonArray();
                 long      epochMs = pair.get(0).getAsLong();
                 double    price   = pair.get(1).getAsDouble();
-
-                // Convert unix milliseconds → "YYYY-MM-DD"
-                LocalDate date = Instant.ofEpochMilli(epochMs)
-                                        .atZone(ZoneOffset.UTC)
-                                        .toLocalDate();
-
-                result.add(new PricePoint(symbol, price, "USD", date.format(fmt)));
+                String    date    = Instant.ofEpochMilli(epochMs)
+                                           .atZone(ZoneOffset.UTC)
+                                           .toLocalDate()
+                                           .format(fmt);
+                // For crypto from this endpoint, OHLC = close price
+                result.add(new PricePoint(symbol, price, price, price, price, "USD", date));
             }
 
-            // CoinGecko returns oldest first; ensure sorted
             result.sort(Comparator.comparing(PricePoint::getDate));
             System.out.println("[API] CoinGecko: " + result.size() + " points for " + symbol);
             return result;
 
         } catch (JsonSyntaxException e) {
-            lastError = "Failed to parse CoinGecko response: " + e.getMessage();
-            System.err.println("[API] " + lastError);
+            lastError = "Parse error (CoinGecko): " + e.getMessage();
             return null;
         }
     }
 
     // ── HTTP helper ───────────────────────────────────────────────────────────
 
-    /**
-     * Sends an HTTP GET request to {@code url} and returns the raw response body.
-     * Sets {@link #lastError} and returns {@code null} on any failure.
-     */
     private String fetchRaw(String url) {
         try {
             HttpRequest request = HttpRequest.newBuilder()
@@ -269,15 +223,12 @@ public class ApiFetcher {
 
             if (response.statusCode() >= 200 && response.statusCode() < 300) {
                 return response.body();
-            } else {
-                lastError = "HTTP " + response.statusCode() + " from " + url;
-                System.err.println("[API] " + lastError);
-                return null;
             }
+            lastError = "HTTP " + response.statusCode();
+            return null;
 
         } catch (IOException e) {
             lastError = "Network error: " + e.getMessage();
-            System.err.println("[API] " + lastError);
             return null;
         } catch (InterruptedException e) {
             lastError = "Request interrupted.";
