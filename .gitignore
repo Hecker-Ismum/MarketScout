@@ -22,6 +22,9 @@ desktop.ini
 # Database files created at runtime
 *.db
 
+# User settings (contains private API key — never commit)
+settings.properties
+
 # Maven Shade plugin generated file
 dependency-reduced-pom.xml
 

@@ -14,7 +14,7 @@ import javafx.scene.layout.*;
 
 // ── Controls ──────────────────────────────────────────────────────────────────
 import javafx.scene.control.*;
-import javafx.scene.control.cell.PropertyValueFactory;
+
 
 // ── Chart ─────────────────────────────────────────────────────────────────────
 import javafx.scene.chart.*;
@@ -22,7 +22,7 @@ import javafx.scene.chart.*;
 // ── Geometry / Paint ─────────────────────────────────────────────────────────
 import javafx.geometry.*;
 import javafx.scene.paint.Color;
-import javafx.scene.text.Font;
+
 
 // ── Java standard ─────────────────────────────────────────────────────────────
 import java.awt.Desktop;
@@ -49,9 +49,10 @@ import java.util.List;
 public class Main extends Application {
 
     // ── Services ──────────────────────────────────────────────────────────────
-    private final DatabaseManager db         = new DatabaseManager();
-    private final ApiFetcher      apiFetcher = new ApiFetcher();
+    private final DatabaseManager db          = new DatabaseManager();
+    private final ApiFetcher      apiFetcher  = new ApiFetcher();
     private final NewsFetcher     newsFetcher = new NewsFetcher();
+    private final SettingsManager settings    = SettingsManager.getInstance();
     private       PriceScheduler  scheduler   = new PriceScheduler();
 
     // ── State ─────────────────────────────────────────────────────────────────
@@ -123,6 +124,20 @@ public class Main extends Application {
         stage.setMinHeight(550);
         stage.setOnCloseRequest(e -> { if (scheduler.isRunning()) scheduler.stop(); });
         stage.show();
+
+        // ── Restore saved settings ────────────────────────────────────────────
+        String savedKey      = settings.get(SettingsManager.KEY_API_KEY, "");
+        String savedInterval = settings.get(SettingsManager.KEY_INTERVAL, "5");
+        if (!savedKey.isEmpty())      apiKeyField.setText(savedKey);
+        if (!savedInterval.isEmpty()) intervalField.setText(savedInterval);
+
+        // Auto-save whenever either field loses focus
+        apiKeyField.focusedProperty().addListener((obs, wasFocused, isNow) -> {
+            if (!isNow) settings.set(SettingsManager.KEY_API_KEY, apiKeyField.getText().trim());
+        });
+        intervalField.focusedProperty().addListener((obs, wasFocused, isNow) -> {
+            if (!isNow) settings.set(SettingsManager.KEY_INTERVAL, intervalField.getText().trim());
+        });
 
         refreshWatchlistView();
         refreshAlertsList();
@@ -380,7 +395,7 @@ public class Main extends Application {
         // ── Table ─────────────────────────────────────────────────────────────
         portfolioTable = new TableView<>(portfolioRows);
         portfolioTable.setStyle("-fx-background-color:#12121e;-fx-border-color:#2a2a45;");
-        portfolioTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
+        portfolioTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
         portfolioTable.setPlaceholder(new Label("No holdings yet — add one above.") {{
             setStyle("-fx-text-fill:#555570;"); }});
 
@@ -502,8 +517,11 @@ public class Main extends Application {
         chartSpinner.setVisible(true);
         setStatus("Fetching " + ticker + " from " + src + "…", false);
 
+        // Persist the key so it survives restarts
+        String apiKey = apiKeyField.getText().trim();
+        settings.set(SettingsManager.KEY_API_KEY, apiKey);
+
         new Thread(() -> {
-            String apiKey = apiKeyField.getText().trim();
             List<PricePoint> data = apiFetcher.fetchHistory(ticker, apiKey);
             Platform.runLater(() -> {
                 fetchButton.setDisable(false);
