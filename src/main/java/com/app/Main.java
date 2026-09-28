@@ -13,6 +13,7 @@ import javafx.scene.layout.*;
 
 // ── Controls ──────────────────────────────────────────────────────────────────
 import javafx.scene.control.*;
+import javafx.scene.control.PasswordField;
 
 // ── Chart ─────────────────────────────────────────────────────────────────────
 import javafx.scene.chart.*;
@@ -101,10 +102,13 @@ public class Main extends Application {
     // ─────────────────────────────────────────────────────────────────────────
     // toolbar
     private ComboBox<String>          assetCombo;
-    private TextField                 apiKeyField;
+    private PasswordField                apiKeyField;
     private Button                    btn1W, btn1M, btn3M, btn1Y, btnAll;
     private CheckBox                  sma20Box, sma50Box, ema20Box;
     private ProgressIndicator         spinner;
+
+    // right panel
+    private VBox                      rightPanel;
 
     // chart
     private LineChart<String, Number> chart;
@@ -158,6 +162,17 @@ public class Main extends Application {
         stage.setMinHeight(540);
         stage.setOnCloseRequest(e -> { if (scheduler.isRunning()) scheduler.stop(); });
         stage.show();
+
+        // ── Responsive layout bindings (relative to window dimensions) ────────
+        // Right panel: 14% of window width (min 145px)
+        rightPanel.prefWidthProperty().bind(
+                scene.widthProperty().multiply(0.14).map(n -> Math.max(n.doubleValue(), 145.0)));
+        // Collapsed bottom content: 32% of window height when expanded
+        bottomContent.prefHeightProperty().bind(scene.heightProperty().multiply(0.32));
+        // Asset ComboBox: 13% of window width
+        assetCombo.prefWidthProperty().bind(scene.widthProperty().multiply(0.13));
+        // API key field: 11% of window width
+        apiKeyField.prefWidthProperty().bind(scene.widthProperty().multiply(0.11));
 
         // Restore saved API key
         String savedKey = settings.get(SettingsManager.KEY_API_KEY, "");
@@ -256,10 +271,10 @@ public class Main extends Application {
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
 
-        // ── API key field ─────────────────────────────────────────────────────
+        // ── API key PasswordField ─────────────────────────────────────────────
         Label keyLbl = new Label("KEY:");
         keyLbl.setStyle("-fx-text-fill:" + TX_D + ";-fx-font-size:9px;-fx-font-family:" + FNT + ";");
-        apiKeyField = new TextField();
+        apiKeyField = new PasswordField();
         apiKeyField.setPromptText("ALPHA VANTAGE...");
         apiKeyField.setPrefWidth(135);
         apiKeyField.setStyle(
@@ -268,7 +283,24 @@ public class Main extends Application {
                 + "-fx-border-color:" + BD + ";-fx-border-radius:0;"
                 + "-fx-font-size:10px;-fx-font-family:" + FNT + ";");
         apiKeyField.setTooltip(new Tooltip(
-                "Free key at alphavantage.co\nSaved automatically — only enter once."));
+                "Free key at alphavantage.co\nSaved automatically — only enter once.\nKey is masked for security."));
+
+        // Show / hide key toggle
+        final boolean[] keyVisible = {false};
+        final TextField keyPlainField = new TextField();
+        keyPlainField.setStyle(apiKeyField.getStyle());
+        keyPlainField.setPromptText("ALPHA VANTAGE...");
+        keyPlainField.setVisible(false);
+        keyPlainField.setManaged(false);
+        keyPlainField.textProperty().bindBidirectional(apiKeyField.textProperty());
+        Button showHideBtn = retBtn("[👁]", TX_D);
+        showHideBtn.setTooltip(new Tooltip("Show / hide API key"));
+        showHideBtn.setOnAction(e -> {
+            keyVisible[0] = !keyVisible[0];
+            apiKeyField.setVisible(!keyVisible[0]);  apiKeyField.setManaged(!keyVisible[0]);
+            keyPlainField.setVisible(keyVisible[0]); keyPlainField.setManaged(keyVisible[0]);
+            showHideBtn.setText(keyVisible[0] ? "[🔒]" : "[👁]");
+        });
 
         // ── CSV export ────────────────────────────────────────────────────────
         Button csvBtn = retBtn("[↓ CSV]", TX_M);
@@ -281,7 +313,7 @@ public class Main extends Application {
                 vSep(), btn1W, btn1M, btn3M, btn1Y, btnAll,
                 vSep(), sma20Box, sma50Box, ema20Box,
                 spacer,
-                keyLbl, apiKeyField, csvBtn);
+                keyLbl, apiKeyField, keyPlainField, showHideBtn, csvBtn);
         bar.setAlignment(Pos.CENTER_LEFT);
         bar.setPadding(new Insets(7, 12, 7, 14));
         bar.setStyle("-fx-background-color:" + BG_P + ";"
@@ -322,10 +354,10 @@ public class Main extends Application {
     // ─────────────────────────────────────────────────────────────────────────
 
     private VBox buildRightPanel() {
-        VBox panel = new VBox(5);
-        panel.setPrefWidth(160);
-        panel.setPadding(new Insets(10, 8, 10, 8));
-        panel.setStyle("-fx-background-color:" + BG_P + ";"
+        rightPanel = new VBox(5);
+        rightPanel.setPrefWidth(160);
+        rightPanel.setPadding(new Insets(10, 8, 10, 8));
+        rightPanel.setStyle("-fx-background-color:" + BG_P + ";"
                 + "-fx-border-color:" + BD + ";-fx-border-width:0 0 0 1;");
 
         // Price
@@ -337,12 +369,12 @@ public class Main extends Application {
         priceChangeLabel.setStyle("-fx-text-fill:" + TX_M + ";-fx-font-size:10px;"
                 + "-fx-font-family:" + FNT + ";");
 
-        panel.getChildren().addAll(
+        rightPanel.getChildren().addAll(
                 panelLabel("PRICE"), priceLabel, priceChangeLabel, hLine());
 
         // Watchlist
-        panel.getChildren().add(panelLabel("WATCHLIST"));
-        panel.getChildren().add(subLabel("// double-click to load"));
+        rightPanel.getChildren().add(panelLabel("WATCHLIST"));
+        rightPanel.getChildren().add(subLabel("// double-click to load"));
 
         watchlistView = new ListView<>();
         watchlistView.setCellFactory(lv -> new WatchlistCell());
@@ -383,8 +415,8 @@ public class Main extends Application {
             if (sel != null) { db.removeFromWatchlist(sel.getId()); refreshWatchlistView(); }
         });
 
-        panel.getChildren().addAll(watchlistView, wRow, wDel);
-        return panel;
+        rightPanel.getChildren().addAll(watchlistView, wRow, wDel);
+        return rightPanel;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -453,15 +485,19 @@ public class Main extends Application {
     private TabPane buildBottomTabs() {
         // ── ALERTS ───────────────────────────────────────────────────────────
         alertTargetField = inlineField("TARGET PRICE...", 140);
-        Button addAlertBtn = retBtn("[+] ADD", TX_M);
-        Button delAlertBtn = retBtn("[DEL]", TX_R);
+        Button addAlertBtn  = retBtn("[+] ADD",  TX_M);
+        Button editAlertBtn = retBtn("[✎] EDIT", TX_A);
+        Button delAlertBtn  = retBtn("[DEL]",    TX_R);
         addAlertBtn.setOnAction(e -> addAlert());
         delAlertBtn.setOnAction(e -> deleteAlert());
+        editAlertBtn.setOnAction(e -> editAlert());
+        editAlertBtn.setTooltip(new Tooltip("Update the target price for the selected alert (SQL UPDATE)"));
         alertsListView = new ListView<>();
         alertsListView.setCellFactory(lv -> new AlertCell());
         VBox.setVgrow(alertsListView, Priority.ALWAYS);
 
-        HBox alertForm = new HBox(6, alertTargetField, addAlertBtn, delAlertBtn);
+        HBox alertForm = new HBox(6, alertTargetField, addAlertBtn, editAlertBtn, delAlertBtn);
+
         alertForm.setPadding(new Insets(6, 10, 6, 10));
         alertForm.setStyle("-fx-background-color:" + BG_P + ";"
                 + "-fx-border-color:" + BD + ";-fx-border-width:0 0 1 0;");
@@ -679,6 +715,38 @@ public class Main extends Application {
         refreshAlertsList();
         setStatus("OK  // ALERT DELETED.", false);
     }
+
+    /**
+     * UPDATE — opens a dialog to change the target price of an existing alert.
+     * Calls {@link DatabaseManager#updateAlertPrice(int, double)} which executes
+     * an explicit {@code UPDATE alerts SET target_price = ? WHERE id = ?} statement.
+     */
+    private void editAlert() {
+        Alert sel = alertsListView.getSelectionModel().getSelectedItem();
+        if (sel == null) { setStatus("ERR // SELECT AN ALERT TO EDIT.", true); return; }
+
+        TextInputDialog dialog = new TextInputDialog(String.format("%.2f", sel.getTargetPrice()));
+        dialog.setTitle("EDIT ALERT");
+        dialog.setHeaderText("UPDATE TARGET PRICE FOR " + sel.getTicker());
+        dialog.setContentText("NEW PRICE $:");
+        // Apply retro styling
+        dialog.getDialogPane().setStyle("-fx-background-color:#080808;-fx-font-family:'Courier New';");
+        dialog.getDialogPane().getChildren().forEach(n ->
+                n.setStyle("-fx-text-fill:#00cc33;-fx-font-family:'Courier New';"));
+
+        dialog.showAndWait().ifPresent(input -> {
+            try {
+                double newPrice = Double.parseDouble(input.trim());
+                if (newPrice <= 0) throw new NumberFormatException();
+                db.updateAlertPrice(sel.getId(), newPrice);   // ← explicit SQL UPDATE
+                refreshAlertsList();
+                setStatus(String.format("OK  // ALERT UPDATED: %s @ $%.2f", sel.getTicker(), newPrice), false);
+            } catch (NumberFormatException ex) {
+                setStatus("ERR // INVALID PRICE — ENTER A POSITIVE NUMBER.", true);
+            }
+        });
+    }
+
 
     private void checkAlerts(List<PricePoint> data) {
         if (data == null || data.isEmpty()) return;

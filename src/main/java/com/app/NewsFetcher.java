@@ -4,25 +4,26 @@ import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Fetches financial news and sentiment data from the
- * <a href="https://www.alphavantage.co/documentation/#news-sentiment">
- * Alpha Vantage NEWS_SENTIMENT endpoint</a>.
+ * Fetches financial news and sentiment from the Alpha Vantage NEWS_SENTIMENT
+ * endpoint.
  *
- * <p><b>Note:</b> the free Alpha Vantage demo key only returns news for IBM.
+ * <h3>Class hierarchy</h3>
+ * <pre>
+ *   AbstractService
+ *       └── NewsFetcher
+ * </pre>
+ *
+ * <p>All HTTP I/O and error handling is inherited from {@link AbstractService};
+ * this class only contains news-specific parsing logic.</p>
+ *
+ * <p><b>Note:</b> the free demo key only returns news for IBM.
  * Users must supply their own free key for other tickers.</p>
- *
- * <p>Example URL:
- * {@code https://www.alphavantage.co/query?function=NEWS_SENTIMENT&tickers=AAPL&limit=20&apikey=KEY}</p>
  */
-public class NewsFetcher {
+public class NewsFetcher extends AbstractService {
 
     private static final String URL_TEMPLATE =
             "https://www.alphavantage.co/query"
@@ -31,19 +32,17 @@ public class NewsFetcher {
             + "&limit=25"
             + "&apikey=%s";
 
-    private final HttpClient client = HttpClient.newHttpClient();
-    private final Gson       gson   = new Gson();
+    private final Gson gson = new Gson();
 
-    private String lastError = "";
-
-    public String getLastError() { return lastError; }
+    @Override
+    protected String getServiceName() { return "NewsFetcher"; }
 
     /**
      * Fetches up to 25 recent news articles for the given ticker.
      *
-     * @param ticker  the stock symbol (e.g. "AAPL"); crypto symbols are not supported
-     * @param apiKey  Alpha Vantage API key (null / blank → "demo" key, works for IBM only)
-     * @return a list of {@link NewsItem} objects (may be empty on error or no results)
+     * @param ticker the stock symbol (e.g. "IBM")
+     * @param apiKey Alpha Vantage API key; blank → "demo" (IBM only)
+     * @return list of {@link NewsItem} objects (may be empty on error)
      */
     public List<NewsItem> fetchNews(String ticker, String apiKey) {
         lastError = "";
@@ -51,37 +50,24 @@ public class NewsFetcher {
         String url = String.format(URL_TEMPLATE, ticker.toUpperCase(), key);
 
         List<NewsItem> result = new ArrayList<>();
+        String json = fetchRaw(url);
+        if (json == null) return result;
 
         try {
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(url))
-                    .header("Accept", "application/json")
-                    .GET()
-                    .build();
+            JsonObject root = gson.fromJson(json, JsonObject.class);
 
-            HttpResponse<String> response =
-                    client.send(request, HttpResponse.BodyHandlers.ofString());
-
-            if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                lastError = "HTTP " + response.statusCode();
-                return result;
-            }
-
-            JsonObject root = gson.fromJson(response.body(), JsonObject.class);
-
-            // API-level errors
             if (root.has("Note")) {
-                lastError = "Rate limit: " + root.get("Note").getAsString();
+                logError("Rate limit: " + root.get("Note").getAsString());
                 return result;
             }
             if (root.has("Information")) {
-                lastError = root.get("Information").getAsString();
+                logError(root.get("Information").getAsString());
                 return result;
             }
 
             JsonArray feed = root.getAsJsonArray("feed");
             if (feed == null || feed.isEmpty()) {
-                lastError = "No news found for " + ticker + " (demo key only works for IBM)";
+                logError("No news found for " + ticker + " (demo key only works for IBM)");
                 return result;
             }
 
@@ -96,30 +82,17 @@ public class NewsFetcher {
                         safeDbl(item, "overall_sentiment_score")
                 ));
             }
-
-            System.out.println("[News] Fetched " + result.size() + " articles for " + ticker);
+            System.out.println("[NewsFetcher] " + result.size() + " articles for " + ticker);
 
         } catch (Exception e) {
-            lastError = "Error fetching news: " + e.getMessage();
-            System.err.println("[News] " + lastError);
+            logError("Parse error: " + e.getMessage());
         }
-
         return result;
     }
 
     // ── JSON helpers ──────────────────────────────────────────────────────────
 
-    private String safeStr(JsonObject obj, String key) {
-        return safeStr(obj, key, "");
-    }
-
-    private String safeStr(JsonObject obj, String key, String fallback) {
-        return (obj.has(key) && !obj.get(key).isJsonNull())
-                ? obj.get(key).getAsString() : fallback;
-    }
-
-    private double safeDbl(JsonObject obj, String key) {
-        return (obj.has(key) && !obj.get(key).isJsonNull())
-                ? obj.get(key).getAsDouble() : 0.0;
-    }
+    private String safeStr(JsonObject o, String k)               { return safeStr(o, k, ""); }
+    private String safeStr(JsonObject o, String k, String fb)    { return (o.has(k) && !o.get(k).isJsonNull()) ? o.get(k).getAsString() : fb; }
+    private double safeDbl(JsonObject o, String k)               { return (o.has(k) && !o.get(k).isJsonNull()) ? o.get(k).getAsDouble() : 0.0; }
 }

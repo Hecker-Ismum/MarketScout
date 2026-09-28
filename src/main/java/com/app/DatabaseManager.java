@@ -198,6 +198,27 @@ public class DatabaseManager {
         }
     }
 
+    /**
+     * UPDATE — changes the target price of an existing alert.
+     * Demonstrates an explicit SQL UPDATE statement (distinct from INSERT OR REPLACE).
+     *
+     * @param id           the alert's primary key
+     * @param newTargetPrice the new target price to set
+     */
+    public void updateAlertPrice(int id, double newTargetPrice) {
+        String sql = "UPDATE alerts SET target_price = ? WHERE id = ?";
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setDouble(1, newTargetPrice);
+            ps.setInt(2, id);
+            int rows = ps.executeUpdate();
+            if (rows > 0) System.out.println("[DB] Alert " + id + " updated to $" + newTargetPrice);
+            else          System.err.println("[DB] Alert " + id + " not found for update.");
+        } catch (SQLException e) {
+            System.err.println("[DB] Error updating alert: " + e.getMessage());
+        }
+    }
+
     // ── Watchlist ─────────────────────────────────────────────────────────────
 
     /** Adds a ticker to the watchlist. Silently ignores duplicates (UNIQUE constraint). */

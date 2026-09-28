@@ -44,7 +44,7 @@ public class PriceScheduler {
      *                        the latest list of {@link PricePoint} objects;
      *                        may receive {@code null} if the fetch fails
      */
-    public void startPriceFetching(ApiFetcher fetcher,
+    public void startPriceFetching(PriceFetcher fetcher,
                                    String ticker,
                                    String apiKey,
                                    long intervalMinutes,
