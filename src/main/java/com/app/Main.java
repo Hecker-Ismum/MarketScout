@@ -4,8 +4,7 @@ package com.app;
 import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.beans.property.SimpleStringProperty;
-import javafx.collections.FXCollections;
-import javafx.collections.ObservableList;
+import javafx.collections.*;
 import javafx.stage.Stage;
 import javafx.scene.Scene;
 
@@ -25,139 +24,162 @@ import javafx.scene.paint.Color;
 // ── Java standard ─────────────────────────────────────────────────────────────
 import java.awt.Desktop;
 import java.net.URI;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 
 /**
- * MarketScout — retro CRT terminal-themed JavaFX market tracker.
+ * MarketScout — Minimal retro CRT terminal layout.
  *
- * <h3>UI Theme</h3>
- * Phosphor-green on near-black; Courier New monospace throughout;
- * ASCII box-drawing chars for section decorations.
- *
- * <h3>Features</h3>
- * Fetch/save OHLC data · Watchlist · Timeframe selectors ·
- * SMA/EMA overlays · CSV export · Auto-refresh · Price alerts ·
- * Toast notifications · Portfolio P&amp;L · News feed
+ * <h3>Layout</h3>
+ * <pre>
+ * ┌─────────────────────────────────────────────────────────────────┬────────┐
+ * │ >_ MARKETSCOUT │ [Asset▾] [↺] │ 1W 1M 3M 1Y ALL │ ☐ SMA …│KEY│CSV│ │ PRICE│
+ * ├─────────────────────────────────────────────────────────────────┤ $xxx  │
+ * │                                                                 │ +1.2% │
+ * │                    CHART  (fills window)                        │────── │
+ * │                                                                 │WATCH  │
+ * │                                                                 │LIST   │
+ * ├──────────────────────────────────────────────────────────────── ┴────── ┤
+ * │ ▸ ALERTS  ▸ PORTFOLIO  ▸ NEWS ──── status ──────────── [▲ EXPAND] │
+ * └─────────────────────────────────────────────────────────────────────────┘
+ * </pre>
  */
 public class Main extends Application {
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Retro colour palette (phosphor green CRT)
+    // Retro colour palette
     // ─────────────────────────────────────────────────────────────────────────
-    private static final String BG_MAIN   = "#080808";
-    private static final String BG_SIDE   = "#0a0f00";
-    private static final String BG_LIST   = "#060a00";
-    private static final String BG_INPUT  = "#000d00";
-    private static final String BG_TOOLBR = "#0d1a00";
-    private static final String BD_DIM    = "#002a00";
-    private static final String BD_MID    = "#005500";
-    private static final String TX_DIM    = "#005a00";
-    private static final String TX_MID    = "#009922";
-    private static final String TX_MAIN   = "#00cc33";
-    private static final String TX_BRIGHT = "#00ff41";
-    private static final String TX_AMBER  = "#ffaa00";
-    private static final String TX_DANGER = "#ff3300";
-    private static final String FONT      = "'Courier New'";
+    private static final String BG    = "#080808";
+    private static final String BG_P  = "#0a0f00";
+    private static final String BG_IN = "#000d00";
+    private static final String BD    = "#002a00";
+    private static final String BD_M  = "#005500";
+    private static final String TX_D  = "#005a00";
+    private static final String TX_M  = "#009922";
+    private static final String TX    = "#00cc33";
+    private static final String TX_B  = "#00ff41";
+    private static final String TX_A  = "#ffaa00";   // amber
+    private static final String TX_R  = "#ff3300";   // red / danger
+    private static final String FNT   = "'Courier New'";
 
-    // ── Services ──────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
+    // Pre-populated asset list  (header rows start with "──")
+    // ─────────────────────────────────────────────────────────────────────────
+    private static final List<String> ASSETS = List.of(
+        "── STOCKS ──",
+        "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA",
+        "NVDA", "META", "IBM",  "JPM",  "NFLX",
+        "BABA", "V",    "BAC",  "DIS",  "UBER",
+        "── CRYPTO ──",
+        "BTC",  "ETH",  "BNB",  "SOL",  "ADA",
+        "DOGE", "XRP",  "LTC",  "LINK", "ATOM"
+    );
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Services
+    // ─────────────────────────────────────────────────────────────────────────
     private final DatabaseManager db          = new DatabaseManager();
-    private final ApiFetcher      apiFetcher  = new ApiFetcher();
+    private final ApiFetcher      api         = new ApiFetcher();
     private final NewsFetcher     newsFetcher = new NewsFetcher();
     private final SettingsManager settings    = SettingsManager.getInstance();
     private       PriceScheduler  scheduler   = new PriceScheduler();
 
-    // ── State ─────────────────────────────────────────────────────────────────
-    private Stage          primaryStage;
-    private String         currentTicker  = "";
-    private double         previousPrice  = 0.0;
-    private List<PricePoint> allData      = new ArrayList<>();
-    private List<PricePoint> filteredData = new ArrayList<>();
-    private int            currentDays    = 0;
-    private boolean        showSMA20      = false;
-    private boolean        showSMA50      = false;
-    private boolean        showEMA20      = false;
-
-    // ── UI – sidebar ──────────────────────────────────────────────────────────
-    private TextField           tickerField;
-    private TextField           apiKeyField;
-    private Button              fetchButton;
-    private ListView<WatchlistItem> watchlistView;
-    private Label               currentPriceLabel;
-    private Label               priceChangeLabel;
-    private TextField           intervalField;
-    private Button              startStopButton;
-    private TextField           alertTargetField;
-    private ListView<Alert>     alertsListView;
-
-    // ── UI – chart tab ────────────────────────────────────────────────────────
-    private LineChart<String, Number> priceChart;
-    private ProgressIndicator         chartSpinner;
-    private Button btn1W, btn1M, btn3M, btn1Y, btnAll;
-    private CheckBox sma20Box, sma50Box, ema20Box;
-
-    // ── UI – portfolio tab ────────────────────────────────────────────────────
-    private TableView<PortfolioRow>          portfolioTable;
-    private ObservableList<PortfolioRow>     portfolioRows = FXCollections.observableArrayList();
-    private TextField portTickerField, portQtyField, portBuyField;
-    private Label     totalValueLabel, totalPnlLabel;
-
-    // ── UI – news tab ─────────────────────────────────────────────────────────
-    private ListView<NewsItem> newsListView;
-    private ProgressIndicator  newsSpinner;
-    private Label              newsStatusLabel;
-
-    // ── Status bar ────────────────────────────────────────────────────────────
-    private Label statusLabel;
+    // ─────────────────────────────────────────────────────────────────────────
+    // State
+    // ─────────────────────────────────────────────────────────────────────────
+    private Stage            primaryStage;
+    private String           currentTicker  = "";
+    private double           previousPrice  = 0;
+    private List<PricePoint> allData        = new ArrayList<>();
+    private List<PricePoint> filteredData   = new ArrayList<>();
+    private int              currentDays    = 30;          // default: 1-month view
+    private boolean          showSMA20, showSMA50, showEMA20;
+    private boolean          bottomExpanded = false;
+    private int              selectedTab    = 0;
 
     // ─────────────────────────────────────────────────────────────────────────
-    // JavaFX lifecycle
+    // UI references
+    // ─────────────────────────────────────────────────────────────────────────
+    // toolbar
+    private ComboBox<String>          assetCombo;
+    private TextField                 apiKeyField;
+    private Button                    btn1W, btn1M, btn3M, btn1Y, btnAll;
+    private CheckBox                  sma20Box, sma50Box, ema20Box;
+    private ProgressIndicator         spinner;
+
+    // chart
+    private LineChart<String, Number> chart;
+
+    // right panel
+    private Label                     priceLabel, priceChangeLabel;
+    private ListView<WatchlistItem>   watchlistView;
+
+    // bottom strip
+    private Label                     statusLabel;
+    private Button                    toggleBottomBtn;
+    private VBox                      bottomContent;
+    private TabPane                   bottomTabPane;
+
+    // bottom tabs
+    private TextField                 alertTargetField;
+    private ListView<Alert>           alertsListView;
+    private TableView<PortfolioRow>   portfolioTable;
+    private ObservableList<PortfolioRow> portfolioRows = FXCollections.observableArrayList();
+    private TextField                 portTickerF, portQtyF, portBuyF;
+    private Label                     totalValueLabel, totalPnlLabel;
+    private ListView<NewsItem>        newsListView;
+    private Label                     newsStatusLabel;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Launch
     // ─────────────────────────────────────────────────────────────────────────
 
     public static void main(String[] args) { launch(args); }
 
     @Override
     public void start(Stage stage) {
-        this.primaryStage = stage;
+        primaryStage = stage;
         db.initializeDatabase();
 
         BorderPane root = new BorderPane();
-        root.setStyle("-fx-background-color:" + BG_MAIN + ";");
-        root.setTop(buildHeader());
-        root.setLeft(buildSidebar());
-        root.setCenter(buildCenterTabs());
-        root.setBottom(buildStatusBar());
+        root.setStyle("-fx-background-color:" + BG + ";");
+        root.setTop(buildToolbar());
+        root.setCenter(buildChartArea());
+        root.setRight(buildRightPanel());
+        root.setBottom(buildBottomBar());
 
-        Scene scene = new Scene(root, 1200, 720);
-        scene.setFill(Color.web(BG_MAIN));
+        Scene scene = new Scene(root, 1280, 760);
+        scene.setFill(Color.web(BG));
+        try { scene.getStylesheets().add(getClass().getResource("/retro.css").toExternalForm()); }
+        catch (Exception e) { System.err.println("[CSS] " + e.getMessage()); }
 
-        // Load external retro CSS (handles chart, tab-pane, scrollbar, table, list)
-        try {
-            String css = getClass().getResource("/retro.css").toExternalForm();
-            scene.getStylesheets().add(css);
-        } catch (Exception e) {
-            System.err.println("[UI] Could not load retro.css: " + e.getMessage());
-        }
-
-        stage.setTitle("MARKETSCOUT v2.0 — Stock & Crypto Terminal");
+        stage.setTitle("MARKETSCOUT v2.0");
         stage.setScene(scene);
         stage.setMinWidth(900);
-        stage.setMinHeight(550);
+        stage.setMinHeight(540);
         stage.setOnCloseRequest(e -> { if (scheduler.isRunning()) scheduler.stop(); });
         stage.show();
 
-        // ── Restore saved settings ────────────────────────────────────────────
-        String savedKey      = settings.get(SettingsManager.KEY_API_KEY, "");
-        String savedInterval = settings.get(SettingsManager.KEY_INTERVAL, "5");
-        if (!savedKey.isEmpty())      apiKeyField.setText(savedKey);
-        if (!savedInterval.isEmpty()) intervalField.setText(savedInterval);
+        // Restore saved API key
+        String savedKey = settings.get(SettingsManager.KEY_API_KEY, "");
+        if (!savedKey.isEmpty()) apiKeyField.setText(savedKey);
+        apiKeyField.focusedProperty().addListener((o, w, n) -> {
+            if (!n) settings.set(SettingsManager.KEY_API_KEY, apiKeyField.getText().trim());
+        });
 
-        apiKeyField.focusedProperty().addListener((obs, was, isNow) -> {
-            if (!isNow) settings.set(SettingsManager.KEY_API_KEY, apiKeyField.getText().trim());
-        });
-        intervalField.focusedProperty().addListener((obs, was, isNow) -> {
-            if (!isNow) settings.set(SettingsManager.KEY_INTERVAL, intervalField.getText().trim());
-        });
+        // Restore last-used ticker from DB cache (no network call on startup)
+        String last = settings.get("last.ticker", "");
+        if (!last.isEmpty()) {
+            List<PricePoint> cached = db.getPriceHistory(last);
+            if (!cached.isEmpty()) {
+                currentTicker = last;
+                allData = cached;
+                assetCombo.setValue(last);
+                applyTimeframe(currentDays);
+                updatePrice(allData);
+                setStatus("OK  // LOADED " + cached.size() + " CACHED POINTS FOR " + last
+                        + "  —  PRESS [↺] TO REFRESH FROM API.");
+            }
+        }
 
         refreshWatchlistView();
         refreshAlertsList();
@@ -168,496 +190,503 @@ public class Main extends Application {
     public void stop() { if (scheduler.isRunning()) scheduler.stop(); }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // UI BUILDERS
+    // TOOLBAR  (single compact row — all chart controls + API key)
     // ─────────────────────────────────────────────────────────────────────────
 
-    /** Terminal-style title bar. */
-    private HBox buildHeader() {
-        HBox hdr = new HBox(12);
-        hdr.setAlignment(Pos.CENTER_LEFT);
-        hdr.setPadding(new Insets(10, 20, 10, 20));
-        hdr.setStyle(
-                "-fx-background-color:" + BG_SIDE + ";"
-                + "-fx-border-color:" + BD_MID + ";"
-                + "-fx-border-width:0 0 2 0;");
+    private HBox buildToolbar() {
+        // ── Logo ─────────────────────────────────────────────────────────────
+        Label logo = new Label(">_ MARKETSCOUT");
+        logo.setStyle("-fx-text-fill:" + TX_B + ";-fx-font-size:16px;"
+                + "-fx-font-weight:bold;-fx-font-family:" + FNT + ";");
 
-        Label logo = new Label(">_  MARKETSCOUT");
-        logo.setStyle("-fx-text-fill:" + TX_BRIGHT + ";"
-                + "-fx-font-size:20px;-fx-font-weight:bold;"
-                + "-fx-font-family:" + FONT + ";");
+        // ── Asset ComboBox ────────────────────────────────────────────────────
+        assetCombo = new ComboBox<>();
+        assetCombo.setEditable(true);
+        assetCombo.setPrefWidth(165);
+        assetCombo.getItems().addAll(ASSETS);
+        assetCombo.setPromptText("TICKER...");
+        assetCombo.setCellFactory(lv -> new AssetListCell());
+        assetCombo.setButtonCell(new AssetButtonCell());
+        assetCombo.setTooltip(new Tooltip(
+                "Choose from the list or type any ticker.\n"
+                + "Crypto (BTC, ETH…) needs no API key.\n"
+                + "Stocks need a free Alpha Vantage key."));
 
-        HBox spacer = new HBox();
-        HBox.setHgrow(spacer, Priority.ALWAYS);
-
-        Label tagline = new Label("[ STOCK & CRYPTO TERMINAL  //  v2.0 ]");
-        tagline.setStyle("-fx-text-fill:" + TX_DIM + ";"
-                + "-fx-font-size:11px;-fx-font-family:" + FONT + ";");
-
-        hdr.getChildren().addAll(logo, spacer, tagline);
-        return hdr;
-    }
-
-    // ── Sidebar ───────────────────────────────────────────────────────────────
-
-    private ScrollPane buildSidebar() {
-        VBox sb = new VBox(5);
-        sb.setPadding(new Insets(10, 8, 10, 8));
-        sb.setPrefWidth(215);
-        sb.setStyle("-fx-background-color:" + BG_SIDE + ";");
-
-        // ── Symbol ───────────────────────────────────────────────────────────
-        sb.getChildren().add(sectionLabel("TICKER"));
-        tickerField = field("e.g. AAPL, BTC, IBM");
-        tickerField.setOnAction(e -> performFetch());
-        apiKeyField = field("ALPHA VANTAGE API KEY");
-        apiKeyField.setTooltip(new Tooltip("Free key: alphavantage.co\nDemo key only works for IBM"));
-        fetchButton = accentBtn("[ FETCH & SAVE ]");
-        fetchButton.setOnAction(e -> performFetch());
-        sb.getChildren().addAll(tickerField,
-                subLabel("// crypto: no key needed"),
-                apiKeyField,
-                subLabel("// blank -> demo (IBM only)"),
-                fetchButton);
-        sb.getChildren().add(divider());
-
-        // ── Watchlist ─────────────────────────────────────────────────────────
-        sb.getChildren().add(sectionLabel("WATCHLIST"));
-        HBox watchRow = new HBox(4);
-        TextField watchField = field("ADD TICKER...");
-        watchField.setPrefWidth(115);
-        Button watchAdd = secondaryBtn("[+]");
-        watchAdd.setPrefWidth(36);
-        watchAdd.setOnAction(e -> {
-            String t = watchField.getText().trim().toUpperCase();
-            if (!t.isEmpty()) { db.addToWatchlist(t); watchField.clear(); refreshWatchlistView(); }
-        });
-        watchRow.getChildren().addAll(watchField, watchAdd);
-
-        watchlistView = new ListView<>();
-        watchlistView.setPrefHeight(95);
-        watchlistView.setOnMouseClicked(e -> {
-            if (e.getClickCount() == 2) {
-                WatchlistItem sel = watchlistView.getSelectionModel().getSelectedItem();
-                if (sel != null) loadFromWatchlist(sel.getTicker());
+        // Auto-fetch when dropdown selection changes
+        assetCombo.setOnAction(e -> {
+            String v = assetCombo.getValue();
+            if (v != null && !v.isBlank() && !v.startsWith("──")) {
+                String t = v.trim().toUpperCase();
+                assetCombo.setValue(t);
+                triggerFetch(t);
             }
         });
-        Button watchDel = dangerBtn("[DEL]");
-        watchDel.setOnAction(e -> {
-            WatchlistItem sel = watchlistView.getSelectionModel().getSelectedItem();
-            if (sel != null) { db.removeFromWatchlist(sel.getId()); refreshWatchlistView(); }
+        // Also trigger when the user types a ticker and presses Enter
+        assetCombo.getEditor().setOnAction(e -> {
+            String v = assetCombo.getEditor().getText().trim().toUpperCase();
+            if (!v.isEmpty() && !v.startsWith("──")) {
+                assetCombo.setValue(v);
+                triggerFetch(v);
+            }
         });
-        sb.getChildren().addAll(watchRow, watchlistView, watchDel,
-                subLabel("// double-click to load"));
-        sb.getChildren().add(divider());
 
-        // ── Live Price ────────────────────────────────────────────────────────
-        sb.getChildren().add(sectionLabel("LIVE PRICE"));
-        currentPriceLabel = new Label("--------");
-        currentPriceLabel.setStyle("-fx-text-fill:" + TX_BRIGHT + ";"
-                + "-fx-font-size:22px;-fx-font-weight:bold;"
-                + "-fx-font-family:" + FONT + ";");
-        priceChangeLabel = new Label("");
-        priceChangeLabel.setStyle("-fx-text-fill:" + TX_MID + ";"
-                + "-fx-font-size:10px;-fx-font-family:" + FONT + ";");
-        sb.getChildren().addAll(currentPriceLabel, priceChangeLabel);
-        sb.getChildren().add(divider());
+        // ── Refresh button ────────────────────────────────────────────────────
+        Button refreshBtn = retBtn("[↺]", TX_M);
+        refreshBtn.setTooltip(new Tooltip("Re-fetch current ticker from the API"));
+        refreshBtn.setOnAction(e -> {
+            String v = assetCombo.getValue();
+            if (v != null && !v.isBlank() && !v.startsWith("──"))
+                triggerFetch(v.trim().toUpperCase());
+        });
 
-        // ── Auto-Refresh ──────────────────────────────────────────────────────
-        sb.getChildren().add(sectionLabel("AUTO-REFRESH"));
-        HBox intRow = new HBox(4);
-        intRow.setAlignment(Pos.CENTER_LEFT);
-        Label evLbl = new Label("EVERY");
-        evLbl.setStyle("-fx-text-fill:" + TX_DIM + ";-fx-font-size:10px;-fx-font-family:" + FONT + ";");
-        intervalField = field("5");
-        intervalField.setPrefWidth(40);
-        Label minLbl = new Label("MIN");
-        minLbl.setStyle("-fx-text-fill:" + TX_DIM + ";-fx-font-size:10px;-fx-font-family:" + FONT + ";");
-        intRow.getChildren().addAll(evLbl, intervalField, minLbl);
-        startStopButton = new Button("[ START ]");
-        startStopButton.setMaxWidth(Double.MAX_VALUE);
-        startStopButton.setStyle(schedulerStyle(false));
-        startStopButton.setOnAction(e -> toggleScheduler());
-        sb.getChildren().addAll(intRow, startStopButton);
-        sb.getChildren().add(divider());
-
-        // ── Alerts ───────────────────────────────────────────────────────────
-        sb.getChildren().add(sectionLabel("PRICE ALERTS"));
-        sb.getChildren().add(subLabel("// triggers when price >= target"));
-        alertTargetField = field("TARGET PRICE...");
-        Button addAlertBtn = secondaryBtn("[+] ADD ALERT");
-        addAlertBtn.setOnAction(e -> addAlert());
-        alertsListView = new ListView<>();
-        alertsListView.setPrefHeight(110);
-        alertsListView.setCellFactory(lv -> new AlertCell());
-        Button delAlertBtn = dangerBtn("[DEL] REMOVE");
-        delAlertBtn.setOnAction(e -> deleteAlert());
-        sb.getChildren().addAll(alertTargetField, addAlertBtn, alertsListView, delAlertBtn);
-
-        ScrollPane scroll = new ScrollPane(sb);
-        scroll.setFitToWidth(true);
-        scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
-        scroll.setStyle("-fx-background-color:" + BG_SIDE + ";-fx-background:" + BG_SIDE + ";");
-        return scroll;
-    }
-
-    // ── Center tabs ───────────────────────────────────────────────────────────
-
-    private TabPane buildCenterTabs() {
-        TabPane tabs = new TabPane();
-        tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
-        tabs.setStyle("-fx-background-color:" + BG_MAIN + ";");
-
-        tabs.getTabs().addAll(
-                new Tab("▸ CHART",     buildChartPane()),
-                new Tab("▸ PORTFOLIO", buildPortfolioPane()),
-                new Tab("▸ NEWS",      buildNewsPane())
-        );
-        return tabs;
-    }
-
-    // ── Chart pane ────────────────────────────────────────────────────────────
-
-    private BorderPane buildChartPane() {
-        // Timeframe buttons
+        // ── Timeframe buttons ─────────────────────────────────────────────────
         btn1W  = tfBtn("1W");  btn1W.setOnAction(e -> applyTimeframe(7));
         btn1M  = tfBtn("1M");  btn1M.setOnAction(e -> applyTimeframe(30));
         btn3M  = tfBtn("3M");  btn3M.setOnAction(e -> applyTimeframe(90));
         btn1Y  = tfBtn("1Y");  btn1Y.setOnAction(e -> applyTimeframe(365));
         btnAll = tfBtn("ALL"); btnAll.setOnAction(e -> applyTimeframe(0));
+        btn1M.setStyle(tfBtnStyle(true));  // default active
 
-        sma20Box = new CheckBox("SMA-20");
-        sma50Box = new CheckBox("SMA-50");
-        ema20Box = new CheckBox("EMA-20");
-        styleCheckBox(sma20Box, TX_AMBER);
-        styleCheckBox(sma50Box, "#ff6600");
-        styleCheckBox(ema20Box, "#00ccee");
-        sma20Box.setOnAction(e -> { showSMA20 = sma20Box.isSelected(); refreshChart(); });
-        sma50Box.setOnAction(e -> { showSMA50 = sma50Box.isSelected(); refreshChart(); });
-        ema20Box.setOnAction(e -> { showEMA20 = ema20Box.isSelected(); refreshChart(); });
+        // ── Indicator checkboxes ──────────────────────────────────────────────
+        sma20Box = chk("SMA-20", TX_A);     sma20Box.setOnAction(e -> { showSMA20 = sma20Box.isSelected(); refreshChart(); });
+        sma50Box = chk("SMA-50", "#ff6600"); sma50Box.setOnAction(e -> { showSMA50 = sma50Box.isSelected(); refreshChart(); });
+        ema20Box = chk("EMA-20", "#00ccee"); ema20Box.setOnAction(e -> { showEMA20 = ema20Box.isSelected(); refreshChart(); });
 
-        Button exportBtn = secondaryBtn("[CSV] EXPORT");
-        exportBtn.setOnAction(e -> CsvExporter.export(currentTicker, filteredData, primaryStage));
+        // ── Spacer ────────────────────────────────────────────────────────────
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
 
-        HBox toolbar = new HBox(7,
-                btn1W, btn1M, btn3M, btn1Y, btnAll,
-                new Separator(Orientation.VERTICAL),
-                sma20Box, sma50Box, ema20Box,
-                new Separator(Orientation.VERTICAL),
-                exportBtn);
-        toolbar.setAlignment(Pos.CENTER_LEFT);
-        toolbar.setPadding(new Insets(7, 12, 7, 12));
-        toolbar.setStyle("-fx-background-color:" + BG_TOOLBR + ";"
-                + "-fx-border-color:" + BD_DIM + ";-fx-border-width:0 0 1 0;");
+        // ── API key field ─────────────────────────────────────────────────────
+        Label keyLbl = new Label("KEY:");
+        keyLbl.setStyle("-fx-text-fill:" + TX_D + ";-fx-font-size:9px;-fx-font-family:" + FNT + ";");
+        apiKeyField = new TextField();
+        apiKeyField.setPromptText("ALPHA VANTAGE...");
+        apiKeyField.setPrefWidth(135);
+        apiKeyField.setStyle(
+                "-fx-background-color:" + BG_IN + ";-fx-text-fill:" + TX_M + ";"
+                + "-fx-prompt-text-fill:" + TX_D + ";-fx-background-radius:0;"
+                + "-fx-border-color:" + BD + ";-fx-border-radius:0;"
+                + "-fx-font-size:10px;-fx-font-family:" + FNT + ";");
+        apiKeyField.setTooltip(new Tooltip(
+                "Free key at alphavantage.co\nSaved automatically — only enter once."));
 
+        // ── CSV export ────────────────────────────────────────────────────────
+        Button csvBtn = retBtn("[↓ CSV]", TX_M);
+        csvBtn.setTooltip(new Tooltip("Export current chart data to a CSV file"));
+        csvBtn.setOnAction(e -> CsvExporter.export(currentTicker, filteredData, primaryStage));
+
+        HBox bar = new HBox(7,
+                logo,
+                vSep(), assetCombo, refreshBtn,
+                vSep(), btn1W, btn1M, btn3M, btn1Y, btnAll,
+                vSep(), sma20Box, sma50Box, ema20Box,
+                spacer,
+                keyLbl, apiKeyField, csvBtn);
+        bar.setAlignment(Pos.CENTER_LEFT);
+        bar.setPadding(new Insets(7, 12, 7, 14));
+        bar.setStyle("-fx-background-color:" + BG_P + ";"
+                + "-fx-border-color:" + BD + ";-fx-border-width:0 0 1 0;");
+        return bar;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // CHART AREA  (fills center; spinner overlaid)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private StackPane buildChartArea() {
         CategoryAxis xAxis = new CategoryAxis();
         xAxis.setLabel("DATE");
         xAxis.setTickLabelRotation(-45);
         NumberAxis yAxis = new NumberAxis();
         yAxis.setLabel("PRICE (USD)");
 
-        priceChart = new LineChart<>(xAxis, yAxis);
-        priceChart.setTitle("// NO DATA — ENTER TICKER AND FETCH");
-        priceChart.setAnimated(false);
-        priceChart.setCreateSymbols(false);
-        priceChart.setLegendVisible(true);
-        priceChart.setStyle("-fx-background-color:" + BG_MAIN + ";");
+        chart = new LineChart<>(xAxis, yAxis);
+        chart.setTitle("// SELECT AN ASSET OR TYPE A TICKER ABOVE");
+        chart.setAnimated(false);
+        chart.setCreateSymbols(false);
+        chart.setLegendVisible(true);
+        chart.setStyle("-fx-background-color:" + BG + ";");
 
-        chartSpinner = new ProgressIndicator();
-        chartSpinner.setMaxSize(50, 50);
-        chartSpinner.setVisible(false);
-        chartSpinner.setStyle("-fx-progress-color:" + TX_BRIGHT + ";");
+        spinner = new ProgressIndicator();
+        spinner.setMaxSize(52, 52);
+        spinner.setStyle("-fx-progress-color:" + TX_B + ";");
+        spinner.setVisible(false);
 
-        StackPane chartArea = new StackPane(priceChart, chartSpinner);
-        chartArea.setStyle("-fx-background-color:" + BG_MAIN + ";");
-
-        BorderPane bp = new BorderPane();
-        bp.setTop(toolbar);
-        bp.setCenter(chartArea);
-        bp.setStyle("-fx-background-color:" + BG_MAIN + ";");
-        return bp;
+        StackPane area = new StackPane(chart, spinner);
+        area.setStyle("-fx-background-color:" + BG + ";");
+        return area;
     }
 
-    // ── Portfolio pane ────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
+    // RIGHT PANEL  (slim: price + watchlist)
+    // ─────────────────────────────────────────────────────────────────────────
 
-    @SuppressWarnings("unchecked")
-    private BorderPane buildPortfolioPane() {
-        portTickerField = field("TICKER");
-        portQtyField    = field("QTY");
-        portBuyField    = field("AVG BUY $");
-        portTickerField.setPrefWidth(110);
-        portQtyField.setPrefWidth(80);
-        portBuyField.setPrefWidth(100);
+    private VBox buildRightPanel() {
+        VBox panel = new VBox(5);
+        panel.setPrefWidth(160);
+        panel.setPadding(new Insets(10, 8, 10, 8));
+        panel.setStyle("-fx-background-color:" + BG_P + ";"
+                + "-fx-border-color:" + BD + ";-fx-border-width:0 0 0 1;");
 
-        Button addHoldBtn     = accentBtn("[+] ADD / UPDATE");
-        addHoldBtn.setPrefWidth(140);
-        addHoldBtn.setOnAction(e -> addPortfolioHolding());
+        // Price
+        priceLabel = new Label("--------");
+        priceLabel.setStyle("-fx-text-fill:" + TX_B + ";-fx-font-size:21px;"
+                + "-fx-font-weight:bold;-fx-font-family:" + FNT + ";");
+        priceLabel.setWrapText(true);
+        priceChangeLabel = new Label("");
+        priceChangeLabel.setStyle("-fx-text-fill:" + TX_M + ";-fx-font-size:10px;"
+                + "-fx-font-family:" + FNT + ";");
 
-        Button refreshPrices  = secondaryBtn("[~] REFRESH");
-        refreshPrices.setOnAction(e -> refreshPortfolioTable());
+        panel.getChildren().addAll(
+                panelLabel("PRICE"), priceLabel, priceChangeLabel, hLine());
 
-        Button delHoldBtn     = dangerBtn("[DEL] REMOVE");
-        delHoldBtn.setOnAction(e -> {
-            PortfolioRow sel = portfolioTable.getSelectionModel().getSelectedItem();
-            if (sel != null) { db.deleteHolding(sel.holding.getId()); refreshPortfolioTable(); setStatus("HOLDING REMOVED.", false); }
+        // Watchlist
+        panel.getChildren().add(panelLabel("WATCHLIST"));
+        panel.getChildren().add(subLabel("// double-click to load"));
+
+        watchlistView = new ListView<>();
+        watchlistView.setCellFactory(lv -> new WatchlistCell());
+        VBox.setVgrow(watchlistView, Priority.ALWAYS);
+        watchlistView.setOnMouseClicked(e -> {
+            if (e.getClickCount() == 2) {
+                WatchlistItem sel = watchlistView.getSelectionModel().getSelectedItem();
+                if (sel != null) {
+                    assetCombo.setValue(sel.getTicker());
+                    triggerFetch(sel.getTicker());
+                }
+            }
         });
 
-        HBox formRow = new HBox(7, portTickerField, portQtyField, portBuyField,
-                addHoldBtn, refreshPrices, delHoldBtn);
-        formRow.setPadding(new Insets(9, 12, 9, 12));
-        formRow.setAlignment(Pos.CENTER_LEFT);
-        formRow.setStyle("-fx-background-color:" + BG_TOOLBR + ";"
-                + "-fx-border-color:" + BD_DIM + ";-fx-border-width:0 0 1 0;");
+        // Watchlist add row
+        HBox wRow = new HBox(4);
+        TextField wField = new TextField();
+        wField.setPromptText("ADD...");
+        wField.setPrefWidth(88);
+        wField.setStyle("-fx-background-color:" + BG_IN + ";-fx-text-fill:" + TX + ";"
+                + "-fx-prompt-text-fill:" + TX_D + ";-fx-background-radius:0;"
+                + "-fx-border-color:" + BD + ";-fx-border-radius:0;"
+                + "-fx-font-size:10px;-fx-font-family:" + FNT + ";");
+        Button wAdd = retBtn("[+]", TX_M);
+        wAdd.setPrefWidth(38);
+        Runnable doAdd = () -> {
+            String t = wField.getText().trim().toUpperCase();
+            if (!t.isEmpty()) { db.addToWatchlist(t); wField.clear(); refreshWatchlistView(); }
+        };
+        wAdd.setOnAction(e -> doAdd.run());
+        wField.setOnAction(e -> doAdd.run());
+        wRow.getChildren().addAll(wField, wAdd);
+
+        Button wDel = retBtn("[DEL]", TX_R);
+        wDel.setMaxWidth(Double.MAX_VALUE);
+        wDel.setOnAction(e -> {
+            WatchlistItem sel = watchlistView.getSelectionModel().getSelectedItem();
+            if (sel != null) { db.removeFromWatchlist(sel.getId()); refreshWatchlistView(); }
+        });
+
+        panel.getChildren().addAll(watchlistView, wRow, wDel);
+        return panel;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // BOTTOM BAR  (strip always visible; content expands upward)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private VBox buildBottomBar() {
+        // Tab strip buttons
+        Button alertsBtn = stripBtn("ALERTS");
+        Button portBtn   = stripBtn("PORTFOLIO");
+        Button newsBtn   = stripBtn("NEWS");
+
+        alertsBtn.setOnAction(e -> toggleOrShow(0));
+        portBtn.setOnAction(e  -> toggleOrShow(1));
+        newsBtn.setOnAction(e  -> toggleOrShow(2));
+
+        statusLabel = new Label(">_ READY");
+        statusLabel.setStyle("-fx-text-fill:" + TX_M + ";-fx-font-size:10px;-fx-font-family:" + FNT + ";");
+
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+
+        toggleBottomBtn = retBtn("[▲ PANEL]", TX_D);
+        toggleBottomBtn.setOnAction(e -> toggleOrShow(-1));
+
+        HBox strip = new HBox(6, alertsBtn, portBtn, newsBtn,
+                spacer, statusLabel, toggleBottomBtn);
+        strip.setAlignment(Pos.CENTER_LEFT);
+        strip.setPadding(new Insets(5, 12, 5, 12));
+        strip.setStyle("-fx-background-color:#060a00;"
+                + "-fx-border-color:" + BD + ";-fx-border-width:1 0 0 0;");
+
+        // Build tab content (collapsed by default)
+        bottomTabPane = buildBottomTabs();
+        bottomContent = new VBox(bottomTabPane);
+        bottomContent.setVisible(false);
+        bottomContent.setManaged(false);
+        bottomContent.setPrefHeight(230);
+
+        // Stack: content above strip
+        return new VBox(bottomContent, strip);
+    }
+
+    /** Toggle collapse OR switch to a specific tab index (-1 = just toggle). */
+    private void toggleOrShow(int tabIndex) {
+        if (tabIndex >= 0) {
+            if (!bottomExpanded) {
+                // Expand and show requested tab
+                bottomExpanded = true;
+                bottomContent.setVisible(true);
+                bottomContent.setManaged(true);
+                toggleBottomBtn.setText("[▼ PANEL]");
+            }
+            selectedTab = tabIndex;
+            bottomTabPane.getSelectionModel().select(tabIndex);
+        } else {
+            // Pure toggle
+            bottomExpanded = !bottomExpanded;
+            bottomContent.setVisible(bottomExpanded);
+            bottomContent.setManaged(bottomExpanded);
+            toggleBottomBtn.setText(bottomExpanded ? "[▼ PANEL]" : "[▲ PANEL]");
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private TabPane buildBottomTabs() {
+        // ── ALERTS ───────────────────────────────────────────────────────────
+        alertTargetField = inlineField("TARGET PRICE...", 140);
+        Button addAlertBtn = retBtn("[+] ADD", TX_M);
+        Button delAlertBtn = retBtn("[DEL]", TX_R);
+        addAlertBtn.setOnAction(e -> addAlert());
+        delAlertBtn.setOnAction(e -> deleteAlert());
+        alertsListView = new ListView<>();
+        alertsListView.setCellFactory(lv -> new AlertCell());
+        VBox.setVgrow(alertsListView, Priority.ALWAYS);
+
+        HBox alertForm = new HBox(6, alertTargetField, addAlertBtn, delAlertBtn);
+        alertForm.setPadding(new Insets(6, 10, 6, 10));
+        alertForm.setStyle("-fx-background-color:" + BG_P + ";"
+                + "-fx-border-color:" + BD + ";-fx-border-width:0 0 1 0;");
+        VBox alertsPane = new VBox(alertForm, alertsListView);
+        VBox.setVgrow(alertsListView, Priority.ALWAYS);
+        alertsPane.setStyle("-fx-background-color:" + BG + ";");
+
+        // ── PORTFOLIO ─────────────────────────────────────────────────────────
+        portTickerF = inlineField("TICKER", 80);
+        portQtyF    = inlineField("QTY",    65);
+        portBuyF    = inlineField("AVG BUY $", 90);
+        Button addHoldBtn  = retBtn("[+] SAVE", TX_B);
+        Button refPriceBtn = retBtn("[~] REFRESH", TX_M);
+        Button delHoldBtn  = retBtn("[DEL]", TX_R);
+        addHoldBtn.setOnAction(e -> addPortfolioHolding());
+        refPriceBtn.setOnAction(e -> refreshPortfolioTable());
+        delHoldBtn.setOnAction(e -> {
+            PortfolioRow sel = portfolioTable.getSelectionModel().getSelectedItem();
+            if (sel != null) { db.deleteHolding(sel.holding.getId()); refreshPortfolioTable(); }
+        });
+        HBox portForm = new HBox(6, portTickerF, portQtyF, portBuyF,
+                addHoldBtn, refPriceBtn, delHoldBtn);
+        portForm.setPadding(new Insets(6, 10, 6, 10));
+        portForm.setStyle("-fx-background-color:" + BG_P + ";"
+                + "-fx-border-color:" + BD + ";-fx-border-width:0 0 1 0;");
 
         portfolioTable = new TableView<>(portfolioRows);
         portfolioTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
-        portfolioTable.setPlaceholder(new Label("// NO HOLDINGS — ADD ONE ABOVE") {{
-            setStyle("-fx-text-fill:" + TX_DIM + ";-fx-font-family:" + FONT + ";"); }});
+        portfolioTable.setPlaceholder(new Label("// NO HOLDINGS") {{
+            setStyle("-fx-text-fill:" + TX_D + ";-fx-font-family:" + FNT + ";"); }});
+        VBox.setVgrow(portfolioTable, Priority.ALWAYS);
 
-        TableColumn<PortfolioRow, String> colTicker  = col("TICKER",   "ticker");
-        TableColumn<PortfolioRow, String> colQty     = col("QTY",      "qty");
-        TableColumn<PortfolioRow, String> colAvg     = col("AVG BUY",  "avgBuy");
-        TableColumn<PortfolioRow, String> colCurrent = col("CURRENT",  "current");
-        TableColumn<PortfolioRow, String> colValue   = col("VALUE",    "value");
-        TableColumn<PortfolioRow, String> colPnl     = col("P&L",      "pnl");
-        TableColumn<PortfolioRow, String> colPnlPct  = col("P&L %",   "pnlPct");
+        TableColumn<PortfolioRow, String> cT = col("TICKER",  "ticker");
+        TableColumn<PortfolioRow, String> cQ = col("QTY",     "qty");
+        TableColumn<PortfolioRow, String> cA = col("AVG BUY", "avgBuy");
+        TableColumn<PortfolioRow, String> cC = col("CURRENT", "current");
+        TableColumn<PortfolioRow, String> cV = col("VALUE",   "value");
+        TableColumn<PortfolioRow, String> cP = col("P&L",     "pnl");
+        TableColumn<PortfolioRow, String> cPct = col("P&L %", "pnlPct");
 
-        colPnl.setCellFactory(c -> new TableCell<>() {
-            @Override protected void updateItem(String item, boolean empty) {
-                super.updateItem(item, empty);
-                if (empty || item == null) { setText(null); setStyle(""); return; }
-                setText(item);
-                setStyle(item.startsWith("+")
-                        ? "-fx-text-fill:#00ff41;-fx-font-weight:bold;-fx-font-family:" + FONT + ";"
-                        : "-fx-text-fill:" + TX_DANGER + ";-fx-font-weight:bold;-fx-font-family:" + FONT + ";");
+        cP.setCellFactory(c -> new TableCell<>() {
+            @Override protected void updateItem(String s, boolean empty) {
+                super.updateItem(s, empty); if (empty || s == null) { setText(null); setStyle(""); return; }
+                setText(s);
+                setStyle(s.startsWith("+") ? "-fx-text-fill:" + TX_B + ";-fx-font-weight:bold;-fx-font-family:" + FNT + ";"
+                                           : "-fx-text-fill:" + TX_R + ";-fx-font-weight:bold;-fx-font-family:" + FNT + ";");
             }
         });
-        colPnlPct.setCellFactory(c -> new TableCell<>() {
-            @Override protected void updateItem(String item, boolean empty) {
-                super.updateItem(item, empty);
-                if (empty || item == null) { setText(null); setStyle(""); return; }
-                setText(item);
-                setStyle(item.startsWith("+")
-                        ? "-fx-text-fill:#00ff41;-fx-font-family:" + FONT + ";"
-                        : "-fx-text-fill:" + TX_DANGER + ";-fx-font-family:" + FONT + ";");
+        cPct.setCellFactory(c -> new TableCell<>() {
+            @Override protected void updateItem(String s, boolean empty) {
+                super.updateItem(s, empty); if (empty || s == null) { setText(null); setStyle(""); return; }
+                setText(s);
+                setStyle(s.startsWith("+") ? "-fx-text-fill:" + TX_B + ";-fx-font-family:" + FNT + ";"
+                                           : "-fx-text-fill:" + TX_R + ";-fx-font-family:" + FNT + ";");
             }
         });
+        portfolioTable.getColumns().addAll(cT, cQ, cA, cC, cV, cP, cPct);
 
-        portfolioTable.getColumns().addAll(
-                colTicker, colQty, colAvg, colCurrent, colValue, colPnl, colPnlPct);
+        totalValueLabel = new Label("VALUE: --");
+        totalValueLabel.setStyle("-fx-text-fill:" + TX_B + ";-fx-font-size:12px;"
+                + "-fx-font-weight:bold;-fx-font-family:" + FNT + ";");
+        totalPnlLabel = new Label("P&L: --");
+        totalPnlLabel.setStyle("-fx-text-fill:" + TX_M + ";-fx-font-size:11px;-fx-font-family:" + FNT + ";");
 
-        totalValueLabel = new Label("TOTAL VALUE: --------");
-        totalValueLabel.setStyle("-fx-text-fill:" + TX_BRIGHT + ";"
-                + "-fx-font-size:13px;-fx-font-weight:bold;-fx-font-family:" + FONT + ";");
-        totalPnlLabel = new Label("TOTAL P&L: --------");
-        totalPnlLabel.setStyle("-fx-text-fill:" + TX_MID + ";"
-                + "-fx-font-size:12px;-fx-font-family:" + FONT + ";");
+        HBox portTotals = new HBox(20, totalValueLabel, totalPnlLabel);
+        portTotals.setPadding(new Insets(5, 10, 5, 10));
+        portTotals.setStyle("-fx-background-color:#060a00;"
+                + "-fx-border-color:" + BD + ";-fx-border-width:1 0 0 0;");
 
-        HBox totalsBar = new HBox(30, totalValueLabel, totalPnlLabel);
-        totalsBar.setPadding(new Insets(9, 12, 9, 12));
-        totalsBar.setStyle("-fx-background-color:#060a00;"
-                + "-fx-border-color:" + BD_DIM + ";-fx-border-width:1 0 0 0;");
+        VBox portPane = new VBox(portForm, portfolioTable, portTotals);
+        VBox.setVgrow(portfolioTable, Priority.ALWAYS);
+        portPane.setStyle("-fx-background-color:" + BG + ";");
 
-        BorderPane bp = new BorderPane();
-        bp.setTop(formRow);
-        bp.setCenter(portfolioTable);
-        bp.setBottom(totalsBar);
-        bp.setStyle("-fx-background-color:" + BG_LIST + ";");
-        return bp;
-    }
-
-    // ── News pane ─────────────────────────────────────────────────────────────
-
-    private BorderPane buildNewsPane() {
-        TextField newsTickerField = field("TICKER (e.g. IBM)");
-        newsTickerField.setPrefWidth(130);
-        Button fetchNewsBtn = accentBtn("[FETCH] NEWS");
-        fetchNewsBtn.setPrefWidth(120);
-        newsSpinner = new ProgressIndicator();
-        newsSpinner.setMaxSize(22, 22);
-        newsSpinner.setVisible(false);
-        newsSpinner.setStyle("-fx-progress-color:" + TX_BRIGHT + ";");
-        newsStatusLabel = new Label("// IBM WORKS WITH DEMO KEY — ADD YOUR KEY FOR OTHER TICKERS");
-        newsStatusLabel.setStyle("-fx-text-fill:" + TX_DIM + ";-fx-font-size:10px;-fx-font-family:" + FONT + ";");
-
+        // ── NEWS ─────────────────────────────────────────────────────────────
+        TextField newsTickerField = inlineField("TICKER (IBM works with demo key)", 210);
+        Button fetchNewsBtn = retBtn("[FETCH]", TX_B);
+        newsStatusLabel = new Label("// IBM WORKS WITH THE DEMO KEY");
+        newsStatusLabel.setStyle("-fx-text-fill:" + TX_D + ";-fx-font-size:9px;-fx-font-family:" + FNT + ";");
         fetchNewsBtn.setOnAction(e -> {
             String t = newsTickerField.getText().trim().toUpperCase();
             if (!t.isEmpty()) fetchNews(t);
         });
+        newsTickerField.setOnAction(e -> fetchNewsBtn.fire());
 
-        HBox newsToolbar = new HBox(8, newsTickerField, fetchNewsBtn, newsSpinner, newsStatusLabel);
-        newsToolbar.setPadding(new Insets(9, 12, 9, 12));
-        newsToolbar.setAlignment(Pos.CENTER_LEFT);
-        newsToolbar.setStyle("-fx-background-color:" + BG_TOOLBR + ";"
-                + "-fx-border-color:" + BD_DIM + ";-fx-border-width:0 0 1 0;");
-
+        HBox newsForm = new HBox(6, newsTickerField, fetchNewsBtn, newsStatusLabel);
+        newsForm.setPadding(new Insets(6, 10, 6, 10));
+        newsForm.setAlignment(Pos.CENTER_LEFT);
+        newsForm.setStyle("-fx-background-color:" + BG_P + ";"
+                + "-fx-border-color:" + BD + ";-fx-border-width:0 0 1 0;");
         newsListView = new ListView<>();
         newsListView.setCellFactory(lv -> new NewsCell());
         newsListView.setPlaceholder(new Label("// NO NEWS LOADED") {{
-            setStyle("-fx-text-fill:" + TX_DIM + ";-fx-font-family:" + FONT + ";"); }});
+            setStyle("-fx-text-fill:" + TX_D + ";-fx-font-family:" + FNT + ";"); }});
+        VBox.setVgrow(newsListView, Priority.ALWAYS);
 
-        BorderPane bp = new BorderPane();
-        bp.setTop(newsToolbar);
-        bp.setCenter(newsListView);
-        bp.setStyle("-fx-background-color:" + BG_LIST + ";");
-        return bp;
-    }
+        VBox newsPane = new VBox(newsForm, newsListView);
+        VBox.setVgrow(newsListView, Priority.ALWAYS);
+        newsPane.setStyle("-fx-background-color:" + BG + ";");
 
-    // ── Status bar ────────────────────────────────────────────────────────────
-
-    private HBox buildStatusBar() {
-        Label prompt = new Label(">_");
-        prompt.setStyle("-fx-text-fill:" + TX_DIM + ";-fx-font-size:11px;-fx-font-family:" + FONT + ";");
-        statusLabel = new Label("SYSTEM READY. ENTER A TICKER AND PRESS [FETCH & SAVE].");
-        statusLabel.setStyle("-fx-text-fill:" + TX_MID + ";-fx-font-size:11px;-fx-font-family:" + FONT + ";");
-        HBox bar = new HBox(6, prompt, statusLabel);
-        bar.setPadding(new Insets(5, 14, 5, 14));
-        bar.setStyle("-fx-background-color:#060a00;"
-                + "-fx-border-color:" + BD_DIM + ";-fx-border-width:1 0 0 0;");
-        return bar;
+        // ── Assemble ─────────────────────────────────────────────────────────
+        TabPane tabs = new TabPane(
+                new Tab("▸ ALERTS",    alertsPane),
+                new Tab("▸ PORTFOLIO", portPane),
+                new Tab("▸ NEWS",      newsPane));
+        tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+        tabs.setStyle("-fx-background-color:" + BG + ";");
+        return tabs;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // FEATURE LOGIC  (unchanged from non-retro version)
+    // FEATURE LOGIC
     // ─────────────────────────────────────────────────────────────────────────
 
-    private void performFetch() {
-        String ticker = tickerField.getText().trim().toUpperCase();
-        if (ticker.isEmpty()) { setStatus("ERR // ENTER A TICKER SYMBOL.", true); return; }
-        boolean crypto = apiFetcher.isCrypto(ticker);
-        String  src    = crypto ? "CoinGecko" : "Alpha Vantage";
-
-        fetchButton.setDisable(true);
-        chartSpinner.setVisible(true);
-        setStatus("FETCHING " + ticker + " FROM " + src + "...", false);
+    /** Central entry point for all fetch operations. */
+    private void triggerFetch(String ticker) {
+        if (ticker == null || ticker.isBlank()) return;
+        currentTicker = ticker;
+        settings.set("last.ticker", ticker);
+        spinner.setVisible(true);
+        setStatus("FETCHING " + ticker + "...", false);
 
         String apiKey = apiKeyField.getText().trim();
         settings.set(SettingsManager.KEY_API_KEY, apiKey);
 
         new Thread(() -> {
-            List<PricePoint> data = apiFetcher.fetchHistory(ticker, apiKey);
+            List<PricePoint> data = api.fetchHistory(ticker, apiKey);
             Platform.runLater(() -> {
-                fetchButton.setDisable(false);
-                chartSpinner.setVisible(false);
+                spinner.setVisible(false);
                 if (data == null || data.isEmpty()) {
-                    setStatus("ERR // " + (apiFetcher.getLastError().isEmpty()
-                            ? "NO DATA FOR " + ticker : apiFetcher.getLastError().toUpperCase()), true);
+                    String err = api.getLastError().isEmpty() ? "NO DATA FOR " + ticker : api.getLastError();
+                    setStatus("ERR // " + err.toUpperCase(), true);
                 } else {
-                    onDataReceived(ticker, data);
+                    allData = data;
+                    db.savePriceHistory(ticker, data);
+                    applyTimeframe(currentDays);
+                    checkAlerts(data);
                     setStatus("OK  // " + data.size() + " POINTS FOR " + ticker + " — SAVED.", false);
                 }
             });
         }).start();
     }
 
-    private void onDataReceived(String ticker, List<PricePoint> data) {
-        currentTicker = ticker;
-        allData       = data;
-        db.savePriceHistory(ticker, data);
-        applyTimeframe(currentDays);
-        checkAlerts(data);
-    }
-
-    private void loadFromWatchlist(String ticker) {
-        tickerField.setText(ticker);
-        List<PricePoint> cached = db.getPriceHistory(ticker);
-        if (!cached.isEmpty()) {
-            allData = cached;
-            currentTicker = ticker;
-            applyTimeframe(currentDays);
-            updateCurrentPrice(allData);
-            setStatus("OK  // LOADED " + cached.size() + " CACHED POINTS FOR "
-                    + ticker + " — CLICK FETCH TO UPDATE.", false);
-        } else {
-            performFetch();
-        }
-    }
-
     private void applyTimeframe(int days) {
         currentDays  = days;
         filteredData = ChartDataHelper.filterByDays(allData, days);
         refreshChart();
-        updateCurrentPrice(filteredData);
+        updatePrice(filteredData);
+        // Highlight active timeframe button
         List.of(btn1W, btn1M, btn3M, btn1Y, btnAll).forEach(b -> b.setStyle(tfBtnStyle(false)));
-        Button active = switch (days) {
-            case 7   -> btn1W;
-            case 30  -> btn1M;
-            case 90  -> btn3M;
-            case 365 -> btn1Y;
-            default  -> btnAll;
-        };
-        if (active != null) active.setStyle(tfBtnStyle(true));
+        switch (days) {
+            case 7   -> btn1W.setStyle(tfBtnStyle(true));
+            case 30  -> btn1M.setStyle(tfBtnStyle(true));
+            case 90  -> btn3M.setStyle(tfBtnStyle(true));
+            case 365 -> btn1Y.setStyle(tfBtnStyle(true));
+            default  -> btnAll.setStyle(tfBtnStyle(true));
+        }
     }
 
     private void refreshChart() {
         if (filteredData == null || filteredData.isEmpty()) return;
-        priceChart.getData().clear();
+        chart.getData().clear();
 
-        XYChart.Series<String, Number> price = new XYChart.Series<>();
-        price.setName(currentTicker + " CLOSE");
+        XYChart.Series<String, Number> series = new XYChart.Series<>();
+        series.setName(currentTicker);
         int step = Math.max(1, filteredData.size() / 150);
         for (int i = 0; i < filteredData.size(); i += step)
-            price.getData().add(new XYChart.Data<>(filteredData.get(i).getDate(), filteredData.get(i).getPrice()));
+            series.getData().add(new XYChart.Data<>(
+                    filteredData.get(i).getDate(), filteredData.get(i).getPrice()));
+        // Always include the last point
+        PricePoint last = filteredData.get(filteredData.size() - 1);
+        if (!series.getData().isEmpty() &&
+                !series.getData().get(series.getData().size() - 1).getXValue().equals(last.getDate()))
+            series.getData().add(new XYChart.Data<>(last.getDate(), last.getPrice()));
 
-        if (!filteredData.isEmpty()) {
-            PricePoint last = filteredData.get(filteredData.size() - 1);
-            if (price.getData().isEmpty() || !price.getData()
-                    .get(price.getData().size() - 1).getXValue().equals(last.getDate()))
-                price.getData().add(new XYChart.Data<>(last.getDate(), last.getPrice()));
-        }
-        priceChart.getData().add(price);
-
-        if (showSMA20) priceChart.getData().add(ChartDataHelper.computeSMA(filteredData, 20, "SMA-20"));
-        if (showSMA50) priceChart.getData().add(ChartDataHelper.computeSMA(filteredData, 50, "SMA-50"));
-        if (showEMA20) priceChart.getData().add(ChartDataHelper.computeEMA(filteredData, 20, "EMA-20"));
-
-        priceChart.setTitle("// " + currentTicker + " — PRICE HISTORY");
+        chart.getData().add(series);
+        if (showSMA20) chart.getData().add(ChartDataHelper.computeSMA(filteredData, 20, "SMA-20"));
+        if (showSMA50) chart.getData().add(ChartDataHelper.computeSMA(filteredData, 50, "SMA-50"));
+        if (showEMA20) chart.getData().add(ChartDataHelper.computeEMA(filteredData, 20, "EMA-20"));
+        chart.setTitle("// " + currentTicker + " — PRICE HISTORY");
     }
 
-    private void updateCurrentPrice(List<PricePoint> data) {
+    private void updatePrice(List<PricePoint> data) {
         if (data == null || data.isEmpty()) return;
         double latest = data.get(data.size() - 1).getPrice();
-        currentPriceLabel.setText(String.format("$%.2f", latest));
+        priceLabel.setText(String.format("$%.2f", latest));
         if (previousPrice > 0) {
-            double delta = latest - previousPrice;
-            double pct   = (delta / previousPrice) * 100.0;
-            String sign  = delta >= 0 ? "+" : "";
-            String color = delta >= 0 ? TX_BRIGHT : TX_DANGER;
-            priceChangeLabel.setText(String.format("%s$%.2f  (%s%.2f%%)", sign, delta, sign, pct));
-            priceChangeLabel.setStyle("-fx-text-fill:" + color + ";-fx-font-size:10px;-fx-font-family:" + FONT + ";");
+            double d   = latest - previousPrice;
+            double pct = (d / previousPrice) * 100;
+            String sgn = d >= 0 ? "+" : "";
+            priceChangeLabel.setText(String.format("%s$%.2f%n(%s%.2f%%)", sgn, d, sgn, pct));
+            priceChangeLabel.setStyle("-fx-text-fill:" + (d >= 0 ? TX_B : TX_R)
+                    + ";-fx-font-size:10px;-fx-font-family:" + FNT + ";");
         }
         previousPrice = latest;
     }
 
     private void addAlert() {
-        String ticker = tickerField.getText().trim().toUpperCase();
-        if (ticker.isEmpty()) { setStatus("ERR // ENTER A TICKER FIRST.", true); return; }
+        if (currentTicker.isEmpty()) { setStatus("ERR // LOAD AN ASSET FIRST.", true); return; }
         try {
             double target = Double.parseDouble(alertTargetField.getText().trim());
             if (target <= 0) throw new NumberFormatException();
-            db.addAlert(ticker, target);
+            db.addAlert(currentTicker, target);
             alertTargetField.clear();
             refreshAlertsList();
-            setStatus(String.format("OK  // ALERT SET: %s @ $%.2f", ticker, target), false);
+            setStatus(String.format("OK  // ALERT: %s >= $%.2f", currentTicker, target), false);
         } catch (NumberFormatException ex) {
-            setStatus("ERR // ENTER A VALID POSITIVE NUMBER.", true);
+            setStatus("ERR // ENTER A VALID POSITIVE PRICE.", true);
         }
     }
 
     private void deleteAlert() {
         Alert sel = alertsListView.getSelectionModel().getSelectedItem();
-        if (sel == null) { setStatus("ERR // SELECT AN ALERT TO DELETE.", true); return; }
+        if (sel == null) { setStatus("ERR // SELECT AN ALERT.", true); return; }
         db.deleteAlert(sel.getId());
         refreshAlertsList();
         setStatus("OK  // ALERT DELETED.", false);
     }
 
     private void checkAlerts(List<PricePoint> data) {
-        if (data == null || data.isEmpty() || currentTicker.isEmpty()) return;
+        if (data == null || data.isEmpty()) return;
         double latest = data.get(data.size() - 1).getPrice();
         for (Alert a : db.getAllAlerts()) {
             if (!a.getTicker().equalsIgnoreCase(currentTicker)) continue;
             if (latest >= a.getTargetPrice()) {
-                String msg = String.format("%s HIT $%.2f (TARGET $%.2f)",
+                String msg = String.format("%s HIT $%.2f  (TARGET $%.2f)",
                         currentTicker, latest, a.getTargetPrice());
                 setStatus(">> ALERT: " + msg, false);
                 NotificationService.show("PRICE ALERT", msg);
@@ -666,87 +695,52 @@ public class Main extends Application {
         refreshAlertsList();
     }
 
-    private void toggleScheduler() {
-        if (scheduler.isRunning()) {
-            scheduler.stop();
-            scheduler = new PriceScheduler();
-            startStopButton.setText("[ START ]");
-            startStopButton.setStyle(schedulerStyle(false));
-            setStatus("OK  // AUTO-REFRESH STOPPED.", false);
-            return;
-        }
-        String ticker = tickerField.getText().trim().toUpperCase();
-        if (ticker.isEmpty()) { setStatus("ERR // ENTER A TICKER FIRST.", true); return; }
-        long interval = 5;
-        try { interval = Math.max(1, Long.parseLong(intervalField.getText().trim())); }
-        catch (NumberFormatException ignored) { intervalField.setText("5"); }
-
-        long   fin = interval;
-        String key = apiKeyField.getText().trim();
-        scheduler.startPriceFetching(apiFetcher, ticker, key, fin, data -> {
-            if (data != null && !data.isEmpty()) {
-                onDataReceived(ticker, data);
-                setStatus("OK  // AUTO-REFRESHED " + ticker + " — " + data.size() + " POINTS.", false);
-            } else {
-                setStatus("ERR // AUTO-REFRESH FAILED: " + apiFetcher.getLastError().toUpperCase(), true);
-            }
-        });
-        startStopButton.setText("[ STOP ]");
-        startStopButton.setStyle(schedulerStyle(true));
-        setStatus("OK  // AUTO-REFRESH STARTED: " + ticker + " EVERY " + fin + " MIN.", false);
-    }
-
     private void addPortfolioHolding() {
-        String ticker = portTickerField.getText().trim().toUpperCase();
+        String ticker = portTickerF.getText().trim().toUpperCase();
         if (ticker.isEmpty()) { setStatus("ERR // ENTER A TICKER.", true); return; }
         try {
-            double qty = Double.parseDouble(portQtyField.getText().trim());
-            double avg = Double.parseDouble(portBuyField.getText().trim());
+            double qty = Double.parseDouble(portQtyF.getText().trim());
+            double avg = Double.parseDouble(portBuyF.getText().trim());
             if (qty <= 0 || avg <= 0) throw new NumberFormatException();
             db.saveHolding(ticker, qty, avg);
-            portTickerField.clear(); portQtyField.clear(); portBuyField.clear();
+            portTickerF.clear(); portQtyF.clear(); portBuyF.clear();
             refreshPortfolioTable();
-            setStatus(String.format("OK  // HOLDING SAVED: %.4f %s @ $%.2f", qty, ticker, avg), false);
+            setStatus(String.format("OK  // SAVED: %.4f %s @ $%.2f", qty, ticker, avg), false);
         } catch (NumberFormatException ex) {
-            setStatus("ERR // ENTER VALID POSITIVE NUMBERS FOR QTY AND PRICE.", true);
+            setStatus("ERR // ENTER VALID POSITIVE NUMBERS.", true);
         }
     }
 
     private void refreshPortfolioTable() {
         List<PortfolioHolding> holdings = db.getAllHoldings();
         portfolioRows.clear();
-        double totalValue = 0, totalCost = 0;
+        double totalVal = 0, totalCost = 0;
         for (PortfolioHolding h : holdings) {
-            double current = db.getLatestPrice(h.getTicker());
-            PortfolioRow row = new PortfolioRow(h, current);
+            double cur = db.getLatestPrice(h.getTicker());
+            PortfolioRow row = new PortfolioRow(h, cur);
             portfolioRows.add(row);
-            if (current > 0) totalValue += row.currentValue;
+            if (cur > 0) totalVal += row.currentValue;
             totalCost += h.getCostBasis();
         }
-        double totalPnl    = totalValue - totalCost;
-        double totalPnlPct = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
-        String sign        = totalPnl >= 0 ? "+" : "";
-        String pnlColor    = totalPnl >= 0 ? TX_BRIGHT : TX_DANGER;
-
-        totalValueLabel.setText(String.format("TOTAL VALUE: $%,.2f", totalValue));
-        totalPnlLabel.setText(String.format("TOTAL P&L: %s$%,.2f (%s%.2f%%)",
-                sign, totalPnl, sign, totalPnlPct));
-        totalPnlLabel.setStyle("-fx-text-fill:" + pnlColor
-                + ";-fx-font-size:12px;-fx-font-family:" + FONT + ";");
+        double pnl  = totalVal - totalCost;
+        double pct  = totalCost > 0 ? (pnl / totalCost) * 100 : 0;
+        String sign = pnl >= 0 ? "+" : "";
+        totalValueLabel.setText(String.format("VALUE: $%,.2f", totalVal));
+        totalPnlLabel.setText(String.format("P&L: %s$%,.2f (%s%.2f%%)", sign, pnl, sign, pct));
+        totalPnlLabel.setStyle("-fx-text-fill:" + (pnl >= 0 ? TX_B : TX_R)
+                + ";-fx-font-size:11px;-fx-font-family:" + FNT + ";");
     }
 
     private void fetchNews(String ticker) {
-        newsSpinner.setVisible(true);
         newsListView.getItems().clear();
-        newsStatusLabel.setText("// FETCHING NEWS FOR " + ticker + "...");
+        newsStatusLabel.setText("// FETCHING " + ticker + "...");
         String key = apiKeyField.getText().trim();
         new Thread(() -> {
             List<NewsItem> items = newsFetcher.fetchNews(ticker, key);
             Platform.runLater(() -> {
-                newsSpinner.setVisible(false);
-                if (items.isEmpty()) {
+                if (items.isEmpty())
                     newsStatusLabel.setText("ERR // " + newsFetcher.getLastError().toUpperCase());
-                } else {
+                else {
                     newsListView.getItems().setAll(items);
                     newsStatusLabel.setText("OK  // " + items.size() + " ARTICLES FOR " + ticker);
                 }
@@ -754,250 +748,216 @@ public class Main extends Application {
         }).start();
     }
 
-    // ── Refresh helpers ───────────────────────────────────────────────────────
-
     private void refreshWatchlistView() { watchlistView.getItems().setAll(db.getWatchlist()); }
     private void refreshAlertsList()    { alertsListView.getItems().setAll(db.getAllAlerts()); }
 
-    private void setStatus(String msg, boolean error) {
+    private void setStatus(String msg, boolean err) {
         statusLabel.setText(msg);
-        statusLabel.setStyle("-fx-text-fill:" + (error ? TX_DANGER : TX_MID)
-                + ";-fx-font-size:11px;-fx-font-family:" + FONT + ";");
+        statusLabel.setStyle("-fx-text-fill:" + (err ? TX_R : TX_M)
+                + ";-fx-font-size:10px;-fx-font-family:" + FNT + ";");
     }
+    private void setStatus(String msg) { setStatus(msg, false); }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // STYLE HELPERS — Retro terminal theme
+    // STYLE HELPERS
     // ─────────────────────────────────────────────────────────────────────────
 
-    private Label sectionLabel(String text) {
-        Label l = new Label("■ " + text);
-        l.setStyle("-fx-text-fill:" + TX_BRIGHT + ";"
-                + "-fx-font-size:10px;-fx-font-weight:bold;"
-                + "-fx-font-family:" + FONT + ";"
-                + "-fx-padding:6 0 1 0;");
+    private Label panelLabel(String t) {
+        Label l = new Label("■ " + t);
+        l.setStyle("-fx-text-fill:" + TX_B + ";-fx-font-size:9px;-fx-font-weight:bold;"
+                + "-fx-font-family:" + FNT + ";-fx-padding:4 0 1 0;");
         return l;
     }
 
-    private Label subLabel(String text) {
-        Label l = new Label(text);
+    private Label subLabel(String t) {
+        Label l = new Label(t);
         l.setWrapText(true);
-        l.setStyle("-fx-text-fill:" + TX_DIM + ";-fx-font-size:8px;-fx-font-family:" + FONT + ";");
+        l.setStyle("-fx-text-fill:" + TX_D + ";-fx-font-size:8px;-fx-font-family:" + FNT + ";");
         return l;
     }
 
-    private Separator divider() {
-        Separator s = new Separator();
-        s.setStyle("-fx-background-color:" + BD_DIM + ";");
-        VBox.setMargin(s, new Insets(5, 0, 4, 0));
-        return s;
-    }
-
-    private TextField field(String prompt) {
-        TextField tf = new TextField();
-        tf.setPromptText(prompt);
-        tf.setMaxWidth(Double.MAX_VALUE);
-        tf.setStyle("-fx-background-color:" + BG_INPUT + ";"
-                + "-fx-text-fill:" + TX_MAIN + ";"
-                + "-fx-prompt-text-fill:" + TX_DIM + ";"
-                + "-fx-background-radius:0;"
-                + "-fx-border-color:" + BD_DIM + ";"
-                + "-fx-border-radius:0;"
-                + "-fx-font-size:11px;"
-                + "-fx-font-family:" + FONT + ";");
-        return tf;
-    }
-
-    private Button accentBtn(String text) {
+    private Button retBtn(String text, String color) {
         Button b = new Button(text);
-        b.setMaxWidth(Double.MAX_VALUE);
-        b.setStyle("-fx-background-color:" + BG_INPUT + ";"
-                + "-fx-text-fill:" + TX_BRIGHT + ";"
-                + "-fx-font-weight:bold;"
-                + "-fx-background-radius:0;"
-                + "-fx-border-color:" + TX_MID + ";"
-                + "-fx-border-radius:0;"
-                + "-fx-font-size:11px;"
-                + "-fx-font-family:" + FONT + ";"
-                + "-fx-cursor:hand;");
+        b.setStyle("-fx-background-color:" + BG_IN + ";-fx-text-fill:" + color + ";"
+                + "-fx-background-radius:0;-fx-border-color:" + BD + ";"
+                + "-fx-border-radius:0;-fx-font-size:10px;-fx-font-family:" + FNT + ";-fx-cursor:hand;");
         return b;
     }
 
-    private Button secondaryBtn(String text) {
-        Button b = new Button(text);
-        b.setMaxWidth(Double.MAX_VALUE);
-        b.setStyle("-fx-background-color:" + BG_INPUT + ";"
-                + "-fx-text-fill:" + TX_MID + ";"
-                + "-fx-background-radius:0;"
-                + "-fx-border-color:" + BD_DIM + ";"
-                + "-fx-border-radius:0;"
-                + "-fx-font-size:11px;"
-                + "-fx-font-family:" + FONT + ";"
-                + "-fx-cursor:hand;");
+    private Button stripBtn(String text) {
+        String style = "-fx-background-color:transparent;-fx-text-fill:" + TX_D + ";"
+                + "-fx-font-size:10px;-fx-font-family:" + FNT + ";-fx-cursor:hand;-fx-border-color:transparent;";
+        String hover  = "-fx-background-color:transparent;-fx-text-fill:" + TX_M + ";"
+                + "-fx-font-size:10px;-fx-font-family:" + FNT + ";-fx-cursor:hand;-fx-border-color:transparent;";
+        Button b = new Button("▸ " + text);
+        b.setStyle(style);
+        b.setOnMouseEntered(e -> b.setStyle(hover));
+        b.setOnMouseExited(e  -> b.setStyle(style));
         return b;
     }
 
-    private Button dangerBtn(String text) {
-        Button b = new Button(text);
-        b.setMaxWidth(Double.MAX_VALUE);
-        b.setStyle("-fx-background-color:" + BG_INPUT + ";"
-                + "-fx-text-fill:" + TX_DANGER + ";"
-                + "-fx-background-radius:0;"
-                + "-fx-border-color:#3a0a00;"
-                + "-fx-border-radius:0;"
-                + "-fx-font-size:11px;"
-                + "-fx-font-family:" + FONT + ";"
-                + "-fx-cursor:hand;");
-        return b;
-    }
-
-    private Button tfBtn(String text) {
-        Button b = new Button(text);
-        b.setStyle(tfBtnStyle(false));
-        return b;
-    }
+    private Button tfBtn(String text) { Button b = new Button(text); b.setStyle(tfBtnStyle(false)); return b; }
 
     private String tfBtnStyle(boolean active) {
         return active
-                ? "-fx-background-color:#001a00;-fx-text-fill:" + TX_BRIGHT + ";"
-                  + "-fx-font-weight:bold;-fx-background-radius:0;"
-                  + "-fx-border-color:" + TX_MID + ";-fx-border-radius:0;"
-                  + "-fx-font-size:11px;-fx-font-family:" + FONT + ";-fx-cursor:hand;"
-                : "-fx-background-color:" + BG_INPUT + ";-fx-text-fill:" + TX_DIM + ";"
-                  + "-fx-background-radius:0;-fx-border-color:" + BD_DIM + ";"
-                  + "-fx-border-radius:0;-fx-font-size:11px;-fx-font-family:" + FONT + ";-fx-cursor:hand;";
+                ? "-fx-background-color:#001a00;-fx-text-fill:" + TX_B + ";-fx-font-weight:bold;"
+                  + "-fx-background-radius:0;-fx-border-color:" + TX_M + ";-fx-border-radius:0;"
+                  + "-fx-font-size:10px;-fx-font-family:" + FNT + ";-fx-cursor:hand;"
+                : "-fx-background-color:" + BG_IN + ";-fx-text-fill:" + TX_D + ";"
+                  + "-fx-background-radius:0;-fx-border-color:" + BD + ";-fx-border-radius:0;"
+                  + "-fx-font-size:10px;-fx-font-family:" + FNT + ";-fx-cursor:hand;";
     }
 
-    private String schedulerStyle(boolean running) {
-        return running
-                ? "-fx-background-color:#200a00;-fx-text-fill:" + TX_AMBER + ";"
-                  + "-fx-font-weight:bold;-fx-background-radius:0;"
-                  + "-fx-border-color:#553300;-fx-border-radius:0;"
-                  + "-fx-font-size:11px;-fx-font-family:" + FONT + ";"
-                : "-fx-background-color:#001500;-fx-text-fill:" + TX_BRIGHT + ";"
-                  + "-fx-font-weight:bold;-fx-background-radius:0;"
-                  + "-fx-border-color:" + BD_MID + ";-fx-border-radius:0;"
-                  + "-fx-font-size:11px;-fx-font-family:" + FONT + ";";
+    private CheckBox chk(String text, String color) {
+        CheckBox cb = new CheckBox(text);
+        cb.setStyle("-fx-text-fill:" + color + ";-fx-font-size:10px;-fx-font-family:" + FNT + ";");
+        return cb;
     }
 
-    private void styleCheckBox(CheckBox cb, String accentColor) {
-        cb.setStyle("-fx-text-fill:" + accentColor
-                + ";-fx-font-size:11px;-fx-font-family:" + FONT + ";");
+    private Separator vSep() {
+        Separator s = new Separator(Orientation.VERTICAL);
+        s.setStyle("-fx-background-color:" + BD + ";");
+        return s;
+    }
+
+    private Separator hLine() {
+        Separator s = new Separator();
+        s.setStyle("-fx-background-color:" + BD + ";");
+        VBox.setMargin(s, new Insets(4, 0, 4, 0));
+        return s;
+    }
+
+    private TextField inlineField(String prompt, double width) {
+        TextField tf = new TextField();
+        tf.setPromptText(prompt);
+        tf.setPrefWidth(width);
+        tf.setStyle("-fx-background-color:" + BG_IN + ";-fx-text-fill:" + TX + ";"
+                + "-fx-prompt-text-fill:" + TX_D + ";-fx-background-radius:0;"
+                + "-fx-border-color:" + BD + ";-fx-border-radius:0;"
+                + "-fx-font-size:10px;-fx-font-family:" + FNT + ";");
+        return tf;
     }
 
     private TableColumn<PortfolioRow, String> col(String header, String field) {
-        TableColumn<PortfolioRow, String> col = new TableColumn<>(header);
-        col.setCellValueFactory(data ->
-                new SimpleStringProperty(data.getValue().get(field)));
-        return col;
+        TableColumn<PortfolioRow, String> c = new TableColumn<>(header);
+        c.setCellValueFactory(d -> new SimpleStringProperty(d.getValue().get(field)));
+        return c;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // INNER: PortfolioRow
+    // INNER CLASSES
     // ─────────────────────────────────────────────────────────────────────────
 
     static class PortfolioRow {
         final PortfolioHolding holding;
         final double currentPrice, currentValue, pnl, pnlPct;
-
-        PortfolioRow(PortfolioHolding h, double currentPrice) {
-            this.holding      = h;
-            this.currentPrice = currentPrice;
-            this.currentValue = currentPrice > 0 ? h.getQuantity() * currentPrice : 0;
-            this.pnl          = currentValue > 0 ? currentValue - h.getCostBasis() : 0;
-            this.pnlPct       = h.getCostBasis() > 0 ? (pnl / h.getCostBasis()) * 100 : 0;
+        PortfolioRow(PortfolioHolding h, double cur) {
+            holding = h; currentPrice = cur;
+            currentValue = cur > 0 ? h.getQuantity() * cur : 0;
+            pnl    = currentValue > 0 ? currentValue - h.getCostBasis() : 0;
+            pnlPct = h.getCostBasis() > 0 ? (pnl / h.getCostBasis()) * 100 : 0;
         }
-
         String get(String f) {
-            String sign = pnl >= 0 ? "+" : "";
+            String s = pnl >= 0 ? "+" : "";
             return switch (f) {
                 case "ticker"  -> holding.getTicker();
                 case "qty"     -> String.format("%.4f", holding.getQuantity());
                 case "avgBuy"  -> String.format("$%.2f", holding.getAvgBuyPrice());
                 case "current" -> currentPrice > 0 ? String.format("$%.2f", currentPrice) : "N/A";
                 case "value"   -> currentValue > 0 ? String.format("$%,.2f", currentValue) : "N/A";
-                case "pnl"     -> currentValue > 0 ? String.format("%s$%,.2f", sign, pnl) : "N/A";
-                case "pnlPct"  -> currentValue > 0 ? String.format("%s%.2f%%", sign, pnlPct) : "N/A";
+                case "pnl"     -> currentValue > 0 ? String.format("%s$%,.2f", s, pnl) : "N/A";
+                case "pnlPct"  -> currentValue > 0 ? String.format("%s%.2f%%", s, pnlPct) : "N/A";
                 default        -> "";
             };
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // INNER: Custom list cells
-    // ─────────────────────────────────────────────────────────────────────────
+    /** Dropdown list cell — shows group headers as dim, non-selectable separators. */
+    private static class AssetListCell extends ListCell<String> {
+        @Override protected void updateItem(String item, boolean empty) {
+            super.updateItem(item, empty);
+            if (empty || item == null) { setText(null); setStyle("-fx-background-color:#060a00;"); return; }
+            if (item.startsWith("──")) {
+                setText(item);
+                setDisable(true);
+                setStyle("-fx-background-color:#0a0f00;-fx-text-fill:#003300;"
+                        + "-fx-font-size:9px;-fx-font-family:'Courier New';-fx-padding:3 6 3 6;");
+            } else {
+                setText(">  " + item);
+                setDisable(false);
+                setStyle("-fx-background-color:#060a00;-fx-text-fill:#00cc33;"
+                        + "-fx-font-size:11px;-fx-font-family:'Courier New';");
+            }
+        }
+    }
+
+    /** Button cell (closed ComboBox display) — just shows the ticker in bright green. */
+    private static class AssetButtonCell extends ListCell<String> {
+        @Override protected void updateItem(String item, boolean empty) {
+            super.updateItem(item, empty);
+            setText((empty || item == null || item.startsWith("──")) ? "" : item);
+            setStyle("-fx-background-color:#000d00;-fx-text-fill:#00ff41;"
+                    + "-fx-font-size:12px;-fx-font-weight:bold;-fx-font-family:'Courier New';");
+        }
+    }
 
     private class AlertCell extends ListCell<Alert> {
         @Override protected void updateItem(Alert a, boolean empty) {
             super.updateItem(a, empty);
-            if (empty || a == null) {
-                setText(null); setStyle("-fx-background-color:" + BG_LIST + ";"); return;
-            }
+            if (empty || a == null) { setText(null); setStyle("-fx-background-color:#060a00;"); return; }
             setText(a.toString());
-            boolean triggered = previousPrice > 0 && previousPrice >= a.getTargetPrice()
+            boolean hit = previousPrice > 0 && previousPrice >= a.getTargetPrice()
                     && a.getTicker().equalsIgnoreCase(currentTicker);
-            setStyle(triggered
-                    ? "-fx-background-color:#1a0a00;-fx-text-fill:" + TX_AMBER
-                      + ";-fx-font-family:" + FONT + ";-fx-font-size:11px;"
-                    : "-fx-background-color:" + BG_LIST + ";-fx-text-fill:" + TX_MAIN
-                      + ";-fx-font-family:" + FONT + ";-fx-font-size:11px;");
+            setStyle(hit
+                    ? "-fx-background-color:#1a0a00;-fx-text-fill:" + TX_A + ";-fx-font-family:'Courier New';-fx-font-size:11px;"
+                    : "-fx-background-color:#060a00;-fx-text-fill:" + TX + ";-fx-font-family:'Courier New';-fx-font-size:11px;");
         }
     }
 
     private static class WatchlistCell extends ListCell<WatchlistItem> {
         @Override protected void updateItem(WatchlistItem item, boolean empty) {
             super.updateItem(item, empty);
-            if (empty || item == null) {
-                setText(null); setStyle("-fx-background-color:" + BG_LIST + ";"); return;
-            }
-            setText("  > " + item.getTicker());
-            setStyle("-fx-background-color:" + BG_LIST + ";-fx-text-fill:" + TX_MAIN
-                    + ";-fx-font-family:" + FONT + ";-fx-font-size:11px;");
+            if (empty || item == null) { setText(null); setStyle("-fx-background-color:#060a00;"); return; }
+            setText(">  " + item.getTicker());
+            setStyle("-fx-background-color:#060a00;-fx-text-fill:#00cc33;"
+                    + "-fx-font-family:'Courier New';-fx-font-size:11px;");
         }
     }
 
     private static class NewsCell extends ListCell<NewsItem> {
         @Override protected void updateItem(NewsItem item, boolean empty) {
             super.updateItem(item, empty);
-            if (empty || item == null) { setText(null); setGraphic(null);
-                setStyle("-fx-background-color:" + BG_LIST + ";"); return; }
+            if (empty || item == null) { setText(null); setGraphic(null); setStyle("-fx-background-color:#060a00;"); return; }
 
-            String sentiment = item.getSentimentLabel();
-            String badge = switch (sentiment.toLowerCase()) {
-                case "bullish", "somewhat bullish" -> "[BULL] " + TX_BRIGHT;
-                case "bearish", "somewhat bearish" -> "[BEAR] " + TX_DANGER;
-                default                            -> "[NEUT] " + TX_MID;
+            String badge = switch (item.getSentimentLabel().toLowerCase()) {
+                case "bullish", "somewhat bullish" -> "[BULL]";
+                case "bearish", "somewhat bearish" -> "[BEAR]";
+                default                            -> "[NEUT]";
             };
-            String[] parts   = badge.split(" ");
-            String   badgeTxt = parts[0];
-            String   badgeClr = parts[1];
+            String badgeColor = switch (item.getSentimentLabel().toLowerCase()) {
+                case "bullish", "somewhat bullish" -> "#00ff41";
+                case "bearish", "somewhat bearish" -> "#ff3300";
+                default                            -> "#009922";
+            };
 
-            VBox box = new VBox(3);
-            box.setPadding(new Insets(6, 10, 6, 10));
-
-            Label titleLbl = new Label(item.getTitle());
-            titleLbl.setWrapText(true);
-            titleLbl.setMaxWidth(Double.MAX_VALUE);
-            titleLbl.setStyle("-fx-text-fill:" + TX_MAIN + ";-fx-font-size:11px;"
-                    + "-fx-font-weight:bold;-fx-font-family:" + FONT + ";");
-
-            Label metaLbl = new Label(
-                    badgeTxt + "  " + item.getSource() + "  //  " + item.getFormattedDate());
-            metaLbl.setStyle("-fx-text-fill:" + badgeClr + ";-fx-font-size:9px;"
-                    + "-fx-font-family:" + FONT + ";");
-
-            box.getChildren().addAll(titleLbl, metaLbl);
-            box.setStyle("-fx-background-color:" + BG_LIST + ";"
-                    + "-fx-border-color:" + BD_DIM + ";-fx-border-width:0 0 1 0;");
+            VBox box = new VBox(2);
+            box.setPadding(new Insets(5, 8, 5, 8));
+            Label title = new Label(item.getTitle());
+            title.setWrapText(true);
+            title.setMaxWidth(Double.MAX_VALUE);
+            title.setStyle("-fx-text-fill:#00cc33;-fx-font-size:11px;-fx-font-weight:bold;-fx-font-family:'Courier New';");
+            Label meta = new Label(badge + "  " + item.getSource() + "  //  " + item.getFormattedDate());
+            meta.setStyle("-fx-text-fill:" + badgeColor + ";-fx-font-size:9px;-fx-font-family:'Courier New';");
+            box.getChildren().addAll(title, meta);
+            box.setStyle("-fx-background-color:#060a00;-fx-border-color:#002a00;-fx-border-width:0 0 1 0;");
 
             setText(null);
             setGraphic(box);
-            setStyle("-fx-background-color:" + BG_LIST + ";");
-
+            setStyle("-fx-background-color:#060a00;");
             setOnMouseClicked(e -> {
-                if (e.getClickCount() == 2 && !item.getUrl().isEmpty()) {
+                if (e.getClickCount() == 2 && !item.getUrl().isEmpty())
                     try { Desktop.getDesktop().browse(new URI(item.getUrl())); }
-                    catch (Exception ex) { System.err.println("[News] Cannot open URL: " + ex.getMessage()); }
-                }
+                    catch (Exception ex) { System.err.println("[News] " + ex.getMessage()); }
             });
         }
     }
